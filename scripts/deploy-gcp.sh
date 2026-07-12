@@ -31,10 +31,22 @@ API_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE_API}:${IMAGE
 WEB_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE_WEB}:${IMAGE_TAG}"
 
 echo "==> Building API image"
-gcloud builds submit --tag "$API_IMAGE" --file apps/api/Dockerfile .
+cat > /tmp/cloudbuild-aquafarm-api.yaml <<EOF
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', '${API_IMAGE}', '-f', 'apps/api/Dockerfile', '.']
+images: ['${API_IMAGE}']
+EOF
+gcloud builds submit --config=/tmp/cloudbuild-aquafarm-api.yaml .
 
 echo "==> Building Web image"
-gcloud builds submit --tag "$WEB_IMAGE" --file apps/web/Dockerfile .
+cat > /tmp/cloudbuild-aquafarm-web.yaml <<EOF
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', '${WEB_IMAGE}', '-f', 'apps/web/Dockerfile', '.']
+images: ['${WEB_IMAGE}']
+EOF
+gcloud builds submit --config=/tmp/cloudbuild-aquafarm-web.yaml .
 
 if ! gcloud sql databases describe "$DB_NAME" --instance="$SQL_INSTANCE" >/dev/null 2>&1; then
   echo "==> Creating database ${DB_NAME}"
