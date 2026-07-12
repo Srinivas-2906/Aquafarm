@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #0F5D5E;
+  --color-primary-dark: #0A4546;
+  --color-primary-light: #DDF2F0;
+  --color-accent: #D99021;
+  --color-background: #F5F7F4;
+  --color-surface: #FFFFFF;
+  --color-text-primary: #17211F;
+  --color-text-secondary: #5D6966;
+  --color-border: #D9E0DD;
+  --color-success: #27864B;
+  --color-warning: #B66B12;
+  --color-danger: #B83A3A;
+  --color-offline: #6B5CA5;
+  --touch-target: 48px;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  @apply bg-background text-text-primary font-sans text-base antialiased;
+  margin: 0;
+  min-height: 100dvh;
+}
+
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type='date'] {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+}
+
+@keyframes slideInUpFade {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@layer components {
+  .animate-slide-in-up {
+    animation: slideInUpFade 180ms ease-out;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 160ms ease-out;
+  }
+
+  .btn-primary {
+    @apply bg-primary text-white font-semibold rounded-lg min-h-touch px-6 py-3 text-lg
+           active:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed
+           transition-colors w-full;
+  }
+
+  .btn-secondary {
+    @apply bg-surface text-primary border-2 border-primary font-semibold rounded-lg
+           min-h-touch px-6 py-3 text-lg active:bg-primary-light transition-colors w-full;
+  }
+
+  .btn-accent {
+    @apply bg-accent text-white font-semibold rounded-lg min-h-touch px-6 py-4 text-xl
+           active:opacity-90 transition-opacity w-full;
+  }
+
+  .card {
+    @apply bg-surface rounded-xl border border-border p-4;
+  }
+
+  .input-field {
+    @apply w-full min-h-touch px-4 py-3 text-xl border-2 border-border rounded-lg
+           bg-surface focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20;
+  }
+
+  .input-compact {
+    @apply w-full min-h-touch px-3 py-2 text-base border-2 border-border rounded-lg
+           bg-surface focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20
+           max-w-full min-w-0 box-border;
+  }
+
+  .label {
+    @apply block text-text-secondary text-sm font-medium mb-1;
+  }
+}
+
+@media print {
+  .no-print { display: none !important; }
+}

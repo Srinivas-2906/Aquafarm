@@ -1,0 +1,496 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EntityStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum UserRole {
+  OWNER
+  SUPERVISOR
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  PENDING_ACTIVATION
+}
+
+enum PondType {
+  POND
+  TANK
+}
+
+enum CultureCycleStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum FeedingEntryStatus {
+  DRAFT
+  CONFIRMED
+  PENDING_OWNER_APPROVAL
+  VOIDED
+}
+
+enum SubmissionType {
+  NORMAL
+  LATE_OFFLINE_SUBMISSION
+}
+
+enum SyncStatus {
+  SYNCED
+  PENDING
+  FAILED
+  LOCAL_ONLY
+}
+
+enum InventoryTransactionType {
+  OPENING_BALANCE
+  FEED_RECEIVED
+  FEED_CONSUMED
+  DAMAGED
+  WASTAGE
+  MANUAL_ADJUSTMENT_IN
+  MANUAL_ADJUSTMENT_OUT
+  REVERSAL
+}
+
+enum InventoryTransactionStatus {
+  CONFIRMED
+  PENDING_APPROVAL
+  REVERSED
+}
+
+enum TransactionDirection {
+  IN
+  OUT
+}
+
+enum AppetiteStatus {
+  EXCELLENT
+  NORMAL
+  SLOW
+  POOR
+  FEED_REMAINING
+}
+
+enum CheckTrayOption {
+  FULLY_CONSUMED
+  LESS_THAN_5
+  BETWEEN_5_10
+  BETWEEN_10_25
+  MORE_THAN_25
+  NOT_CHECKED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  VOID
+  APPROVE
+  REJECT
+  REVERSE
+  DEACTIVATE
+  CONFLICT_RESOLVE
+}
+
+enum SyncOperationStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CONFLICT
+}
+
+enum ReportType {
+  DAILY_FEEDING
+  FEEDING_DATE_RANGE
+  POND_FEEDING
+  DOC_WISE_FEEDING
+  CUMULATIVE_FEED
+  FEED_CODE_USAGE
+  INVENTORY_SUMMARY
+  INVENTORY_TRANSACTIONS
+  SUPERVISOR_ACTIVITY
+  AUDIT_REPORT
+}
+
+enum Language {
+  en
+  te
+}
+
+model Organization {
+  id        String       @id @default(uuid())
+  name      String
+  timezone  String       @default("Asia/Kolkata")
+  pondTerm  String       @default("Tank")
+  status    EntityStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  users       User[]
+  farms       Farm[]
+  ponds       Pond[]
+  cycles      CultureCycle[]
+  feedProducts FeedProduct[]
+  feedingEntries FeedingEntry[]
+  inventoryTransactions InventoryTransaction[]
+  auditLogs   AuditLog[]
+  syncOperations SyncOperation[]
+  generatedReports GeneratedReport[]
+}
+
+model User {
+  id                String     @id @default(uuid())
+  organizationId    String
+  phoneNumber       String
+  displayName       String
+  role              UserRole
+  pinHash           String
+  preferredLanguage Language   @default(en)
+  status            UserStatus @default(ACTIVE)
+  activationCode    String?
+  loginAttempts     Int        @default(0)
+  lockedUntil       DateTime?
+  lastLoginAt       DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farmUsers    FarmUser[]
+  sessions     Session[]
+  feedingEntriesEntered FeedingEntry[] @relation("EnteredBy")
+  feedingEntriesApproved FeedingEntry[] @relation("ApprovedBy")
+  feedingEntriesVoided FeedingEntry[] @relation("VoidedBy")
+  inventoryCreated InventoryTransaction[] @relation("InventoryCreatedBy")
+  inventoryApproved InventoryTransaction[] @relation("InventoryApprovedBy")
+  checkTrayObservations CheckTrayObservation[]
+  auditLogs    AuditLog[]
+  syncOperations SyncOperation[]
+  generatedReports GeneratedReport[]
+
+  @@unique([organizationId, phoneNumber])
+  @@index([organizationId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  refreshToken String   @unique
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Farm {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  location       String?
+  timezone       String       @default("Asia/Kolkata")
+  status         EntityStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farmUsers    FarmUser[]
+  ponds        Pond[]
+  cycles       CultureCycle[]
+  feedProducts FeedProduct[]
+  feedingEntries FeedingEntry[]
+  inventoryTransactions InventoryTransaction[]
+  auditLogs    AuditLog[]
+  syncOperations SyncOperation[]
+  generatedReports GeneratedReport[]
+
+  @@index([organizationId])
+}
+
+model FarmUser {
+  id     String       @id @default(uuid())
+  farmId String
+  userId String
+  role   UserRole
+  status EntityStatus @default(ACTIVE)
+
+  farm Farm @relation(fields: [farmId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([farmId, userId])
+  @@index([userId])
+}
+
+model Pond {
+  id             String       @id @default(uuid())
+  organizationId String
+  farmId         String
+  name           String
+  code           String
+  type           PondType     @default(TANK)
+  area           Decimal?     @db.Decimal(12, 3)
+  areaUnit       String?
+  capacity       Decimal?     @db.Decimal(12, 3)
+  status         EntityStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farm         Farm         @relation(fields: [farmId], references: [id])
+  cycles       CultureCycle[]
+  feedingEntries FeedingEntry[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@unique([farmId, code])
+  @@index([farmId])
+  @@index([organizationId, farmId])
+}
+
+model CultureCycle {
+  id                  String             @id @default(uuid())
+  organizationId      String
+  farmId              String
+  pondId              String
+  cycleName           String
+  stockingDate        DateTime           @db.Date
+  species             String
+  seedCount           Int?
+  stockingDensity     Decimal?           @db.Decimal(12, 3)
+  initialAverageWeight Decimal?          @db.Decimal(12, 3)
+  expectedHarvestDate DateTime?          @db.Date
+  usualMealsPerDay    Int                @default(4)
+  status              CultureCycleStatus @default(ACTIVE)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farm         Farm         @relation(fields: [farmId], references: [id])
+  pond         Pond         @relation(fields: [pondId], references: [id])
+  feedingEntries FeedingEntry[]
+
+  @@index([pondId, status])
+  @@index([farmId])
+}
+
+model FeedProduct {
+  id                  String       @id @default(uuid())
+  organizationId      String
+  farmId              String
+  brandName           String
+  feedCode            String
+  pelletSize          String?
+  bagWeightKg         Decimal      @db.Decimal(12, 3)
+  supplierName        String?
+  lowStockThresholdKg Decimal?     @db.Decimal(12, 3)
+  status              EntityStatus @default(ACTIVE)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farm         Farm         @relation(fields: [farmId], references: [id])
+  feedingEntries FeedingEntry[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@unique([farmId, feedCode])
+  @@index([farmId])
+}
+
+model FeedingEntry {
+  id               String             @id @default(uuid())
+  clientEntryId    String             @unique
+  organizationId   String
+  farmId           String
+  pondId           String
+  cultureCycleId   String
+  feedingDate      DateTime           @db.Date
+  doc              Int
+  feedProductId    String
+  status           FeedingEntryStatus @default(CONFIRMED)
+  submissionType   SubmissionType     @default(NORMAL)
+  syncStatus       SyncStatus         @default(SYNCED)
+  remarks          String?
+  enteredByUserId  String
+  approvedByUserId String?
+  deviceCreatedAt  DateTime?
+  serverCreatedAt  DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  version          Int                @default(1)
+  voidedAt         DateTime?
+  voidedByUserId   String?
+  voidReason       String?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farm         Farm         @relation(fields: [farmId], references: [id])
+  pond         Pond         @relation(fields: [pondId], references: [id])
+  cultureCycle CultureCycle @relation(fields: [cultureCycleId], references: [id])
+  feedProduct  FeedProduct  @relation(fields: [feedProductId], references: [id])
+  enteredBy    User         @relation("EnteredBy", fields: [enteredByUserId], references: [id])
+  approvedBy   User?        @relation("ApprovedBy", fields: [approvedByUserId], references: [id])
+  voidedBy     User?        @relation("VoidedBy", fields: [voidedByUserId], references: [id])
+  meals        FeedingMeal[]
+  checkTrayObservations CheckTrayObservation[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@unique([pondId, feedingDate])
+  @@index([farmId, feedingDate])
+  @@index([pondId, feedingDate])
+  @@index([cultureCycleId, feedingDate])
+  @@index([status, serverCreatedAt])
+}
+
+model FeedingMeal {
+  id                           String          @id @default(uuid())
+  feedingEntryId               String
+  mealNumber                   Int
+  scheduledTime                String?
+  actualTime                   String?
+  feedQuantityKg               Decimal         @db.Decimal(12, 3)
+  checkTrayRemainingPercentage CheckTrayOption?
+  appetiteStatus               AppetiteStatus?
+  remarks                      String?
+  createdAt                    DateTime        @default(now())
+  updatedAt                    DateTime        @updatedAt
+
+  feedingEntry FeedingEntry @relation(fields: [feedingEntryId], references: [id], onDelete: Cascade)
+  checkTrayObservations CheckTrayObservation[]
+
+  @@unique([feedingEntryId, mealNumber])
+  @@index([feedingEntryId])
+}
+
+model CheckTrayObservation {
+  id                  String          @id @default(uuid())
+  feedingEntryId      String
+  feedingMealId       String?
+  trayNumber          Int?
+  checkedAt           DateTime?
+  remainingPercentage CheckTrayOption?
+  observation         String?
+  imageUrl            String?
+  createdByUserId     String
+  createdAt           DateTime        @default(now())
+
+  feedingEntry FeedingEntry @relation(fields: [feedingEntryId], references: [id], onDelete: Cascade)
+  feedingMeal  FeedingMeal? @relation(fields: [feedingMealId], references: [id])
+  createdBy    User         @relation(fields: [createdByUserId], references: [id])
+}
+
+model InventoryTransaction {
+  id                   String                     @id @default(uuid())
+  clientTransactionId  String                     @unique
+  organizationId       String
+  farmId               String
+  feedProductId        String
+  pondId               String?
+  feedingEntryId       String?
+  type                 InventoryTransactionType
+  direction            TransactionDirection
+  quantityKg           Decimal                    @db.Decimal(12, 3)
+  transactionDate      DateTime                   @db.Date
+  remarks              String?
+  supplierName         String?
+  referenceNumber      String?
+  numberOfBags         Int?
+  createdByUserId      String
+  approvedByUserId     String?
+  status               InventoryTransactionStatus @default(CONFIRMED)
+  syncStatus           SyncStatus                 @default(SYNCED)
+  reversedTransactionId String?
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  version              Int                        @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farm         Farm         @relation(fields: [farmId], references: [id])
+  feedProduct  FeedProduct  @relation(fields: [feedProductId], references: [id])
+  pond         Pond?        @relation(fields: [pondId], references: [id])
+  feedingEntry FeedingEntry? @relation(fields: [feedingEntryId], references: [id])
+  createdBy    User         @relation("InventoryCreatedBy", fields: [createdByUserId], references: [id])
+  approvedBy   User?        @relation("InventoryApprovedBy", fields: [approvedByUserId], references: [id])
+
+  @@index([farmId, feedProductId, transactionDate])
+  @@index([feedProductId, transactionDate])
+  @@index([feedingEntryId])
+}
+
+model AuditLog {
+  id                String      @id @default(uuid())
+  organizationId    String
+  farmId            String?
+  userId            String
+  entityType        String
+  entityId          String
+  action            AuditAction
+  previousValueJson Json?
+  newValueJson      Json?
+  reason            String?
+  deviceTimestamp   DateTime?
+  serverTimestamp   DateTime    @default(now())
+  ipAddress         String?
+  userAgent         String?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farm         Farm?        @relation(fields: [farmId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([farmId, serverTimestamp])
+  @@index([userId, serverTimestamp])
+  @@index([entityType, entityId])
+}
+
+model SyncOperation {
+  id                String              @id @default(uuid())
+  clientOperationId String              @unique
+  organizationId    String
+  farmId            String
+  userId            String
+  deviceId          String
+  entityType        String
+  operationType     String
+  payloadJson       Json
+  clientVersion     Int?
+  serverVersion     Int?
+  status            SyncOperationStatus @default(PENDING)
+  failureReason     String?
+  createdAt         DateTime            @default(now())
+  processedAt       DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farm         Farm         @relation(fields: [farmId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([farmId, status, createdAt])
+  @@index([userId, createdAt])
+}
+
+model GeneratedReport {
+  id               String     @id @default(uuid())
+  organizationId   String
+  farmId           String
+  reportType       ReportType
+  filtersJson      Json
+  filePath         String?
+  generatedByUserId String
+  createdAt        DateTime   @default(now())
+  expiresAt        DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  farm         Farm         @relation(fields: [farmId], references: [id])
+  generatedBy  User         @relation(fields: [generatedByUserId], references: [id])
+
+  @@index([farmId, createdAt])
+}

@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aqualedger-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aqualedger
+      POSTGRES_PASSWORD: aqualedger
+      POSTGRES_DB: aqualedger
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aqualedger -d aqualedger"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: aqualedger-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://aqualedger:aqualedger@postgres:5432/aqualedger?schema=public
+      API_PORT: 3001
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-refresh-secret}
+      CORS_ORIGIN: http://localhost:5173
+      COOKIE_SECURE: "false"
+      OTP_MOCK_ENABLED: "true"
+    ports:
+      - "3001:3001"
+
+volumes:
+  postgres_data:

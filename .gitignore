@@ -1,0 +1,15 @@
+node_modules
+dist
+build
+.turbo
+.env
+.env.local
+*.log
+coverage
+.DS_Store
+.postgres-data
+apps/web/dev-dist
+apps/api/reports
+apps/web/tsconfig.tsbuildinfo
+apps/api/prisma/migrations/**/migration_lock.toml
+!apps/api/prisma/migrations/migration_lock.toml
