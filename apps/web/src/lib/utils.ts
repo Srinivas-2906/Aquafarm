@@ -68,6 +68,10 @@ export function getDefaultMealTime(): string {
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 }
 
+export function isSupervisorEditableDate(dateISO: string): boolean {
+  return dateISO === getTodayISO() || dateISO === getYesterdayISO();
+}
+
 export function calculateDoc(stockingDate: string, feedingDate: string): number {
   const stock = new Date(stockingDate);
   const feed = new Date(feedingDate);

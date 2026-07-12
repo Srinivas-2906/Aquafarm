@@ -21,7 +21,8 @@ RUN npm run build -w @aqualedger/web
 FROM nginx:1.27-alpine
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 COPY apps/web/nginx.conf /etc/nginx/templates/default.conf.template
+COPY apps/web/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 ENV API_UPSTREAM=http://127.0.0.1:3001
-ENV PORT=8080
 EXPOSE 8080
-CMD ["sh", "-c", "envsubst '$API_UPSTREAM' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
+CMD ["/docker-entrypoint.sh"]

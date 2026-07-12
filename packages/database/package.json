@@ -10,7 +10,7 @@
     "db:generate": "prisma generate --schema=../../apps/api/prisma/schema.prisma",
     "db:migrate": "prisma migrate dev --schema=../../apps/api/prisma/schema.prisma",
     "db:push": "prisma db push --schema=../../apps/api/prisma/schema.prisma",
-    "db:seed": "tsx ../../apps/api/prisma/seed.ts",
+    "db:seed": "tsx --env-file=../../.env ../../apps/api/prisma/seed.ts",
     "db:studio": "prisma studio --schema=../../apps/api/prisma/schema.prisma"
   },
   "dependencies": {

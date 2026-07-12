@@ -10,7 +10,7 @@ import { Eye, EyeOff } from 'lucide-react';
 export function LoginPage() {
   const { t, i18n } = useTranslation();
   const { user, isLoading, login } = useAuth();
-  const [phone, setPhone] = useState(import.meta.env.DEV ? '9876543210' : '');
+  const [phone, setPhone] = useState(import.meta.env.DEV ? '9985533376' : '');
   const [pin, setPin] = useState(import.meta.env.DEV ? '123456' : '');
   const [showPin, setShowPin] = useState(false);
   const [error, setError] = useState('');
@@ -71,7 +71,7 @@ export function LoginPage() {
               value={phone}
               onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
               className="input-field"
-              placeholder="9876543210"
+              placeholder="9985533376"
               required
             />
           </div>

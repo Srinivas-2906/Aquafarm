@@ -75,6 +75,17 @@ export class FeedingController {
     return this.feeding.addMeal(id, meal as never, userId, role);
   }
 
+  @Patch(':id/meals/:mealId')
+  async updateMeal(
+    @Param('id') id: string,
+    @Param('mealId') mealId: string,
+    @Body() meal: Record<string, unknown>,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.feeding.updateMeal(id, mealId, meal, userId, role);
+  }
+
   @Post(':id/void')
   async void(
     @Param('id') id: string,

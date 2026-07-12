@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useEffect } from 'react';
+import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuidv4 } from 'uuid';
 import { AppShell } from '@/components/AppShell';
@@ -150,6 +150,142 @@ export function DamageFeedPage() {
           <input value={reason} onChange={(e) => setReason(e.target.value)} className="input-field text-base" />
         </div>
         <button onClick={handleSave} disabled={saving} className="btn-primary">{t('common.save')}</button>
+      </div>
+    </AppShell>
+  );
+}
+
+export function FeedProductFormPage() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { feedProductId } = useParams();
+  const queryClient = useQueryClient();
+  const { selectedFarmId } = useAuth();
+  const isEdit = !!feedProductId;
+
+  const [feedCode, setFeedCode] = useState('');
+  const [brandName, setBrandName] = useState('');
+  const [pelletSize, setPelletSize] = useState('');
+  const [bagWeightKg, setBagWeightKg] = useState('');
+  const [supplierName, setSupplierName] = useState('');
+  const [lowStockThresholdKg, setLowStockThresholdKg] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const { data: product, isLoading } = useQuery({
+    queryKey: ['feed-product', feedProductId],
+    queryFn: () => api.get<FeedProductDto>(`/feed-products/${feedProductId}`),
+    enabled: isEdit,
+  });
+
+  useEffect(() => {
+    if (!product) return;
+    setFeedCode(product.feedCode);
+    setBrandName(product.brandName);
+    setPelletSize(product.pelletSize || '');
+    setBagWeightKg(product.bagWeightKg);
+    setSupplierName(product.supplierName || '');
+    setLowStockThresholdKg(product.lowStockThresholdKg || '');
+  }, [product]);
+
+  const handleSave = async () => {
+    if (!selectedFarmId || !feedCode || !brandName || !bagWeightKg) return;
+    setSaving(true);
+    setError('');
+    try {
+      const payload = {
+        feedCode: feedCode.trim(),
+        brandName: brandName.trim(),
+        pelletSize: pelletSize.trim() || undefined,
+        bagWeightKg,
+        supplierName: supplierName.trim() || undefined,
+        lowStockThresholdKg: lowStockThresholdKg || undefined,
+      };
+
+      if (isEdit && feedProductId) {
+        await api.patch(`/feed-products/${feedProductId}`, payload);
+      } else {
+        await api.post(`/farms/${selectedFarmId}/feed-products`, payload);
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['inventory-summary', selectedFarmId] });
+      await queryClient.invalidateQueries({ queryKey: ['feed-products', selectedFarmId] });
+      navigate('/inventory');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t('common.error'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <AppShell title={isEdit ? t('inventory.editFeed') : t('inventory.addFeed')} showNav={false}>
+      <div className="px-4 py-4 space-y-4">
+        {isLoading && isEdit ? (
+          <p className="text-center py-8">{t('common.loading')}</p>
+        ) : (
+          <>
+            <div>
+              <label className="label">{t('feeding.feedCode')}</label>
+              <input
+                value={feedCode}
+                onChange={(e) => setFeedCode(e.target.value.toUpperCase())}
+                className="input-field text-base"
+                placeholder="1C"
+              />
+            </div>
+
+            <div>
+              <label className="label">{t('inventory.brandName')}</label>
+              <input
+                value={brandName}
+                onChange={(e) => setBrandName(e.target.value)}
+                className="input-field text-base"
+              />
+            </div>
+
+            <div>
+              <label className="label">{t('inventory.pelletSize')}</label>
+              <input
+                value={pelletSize}
+                onChange={(e) => setPelletSize(e.target.value)}
+                className="input-field text-base"
+                placeholder="1.2mm"
+              />
+            </div>
+
+            <NumericQuantityInput
+              value={bagWeightKg}
+              onChange={setBagWeightKg}
+              label={t('inventory.bagWeight')}
+            />
+
+            <div>
+              <label className="label">{t('inventory.supplier')}</label>
+              <input
+                value={supplierName}
+                onChange={(e) => setSupplierName(e.target.value)}
+                className="input-field text-base"
+              />
+            </div>
+
+            <NumericQuantityInput
+              value={lowStockThresholdKg}
+              onChange={setLowStockThresholdKg}
+              label={t('inventory.lowStockThreshold')}
+            />
+
+            {error && <p className="text-danger text-sm">{error}</p>}
+
+            <button
+              onClick={handleSave}
+              disabled={saving || !feedCode || !brandName || !bagWeightKg}
+              className="btn-primary"
+            >
+              {saving ? t('common.loading') : t('common.save')}
+            </button>
+          </>
+        )}
       </div>
     </AppShell>
   );

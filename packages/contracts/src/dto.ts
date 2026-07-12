@@ -75,6 +75,7 @@ export interface FeedProductDto {
   pelletSize: string | null;
   bagWeightKg: string;
   supplierName: string | null;
+  lowStockThresholdKg?: string | null;
   status: string;
   currentStockKg?: string;
   equivalentBags?: number;

@@ -3,14 +3,14 @@ import { useNavigate, useSearchParams, useParams, Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuidv4 } from 'uuid';
-import { Plus, ArrowLeft, ScanLine, FileText, X } from 'lucide-react';
+import { Plus, ArrowLeft, ScanLine, FileText, X, Pencil } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { NumericQuantityInput } from '@/components/NumericQuantityInput';
 import { RecordLockNotice } from '@/components/RecordLockNotice';
 import { ScanSheetModal } from '@/components/ScanSheetModal';
 import { useAuth } from '@/contexts/AuthContext';
 import { UserRole } from '@/types/roles';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { saveFeedingLocally } from '@/lib/sync';
 import {
   getTodayISO,
@@ -22,9 +22,60 @@ import {
   getDefaultMealTime,
   calculateDoc,
   addDaysISO,
+  isSupervisorEditableDate,
   type QuantityUnit,
 } from '@/lib/utils';
-import type { PondDto, FeedProductDto, FeedingEntryDto } from '@aqualedger/contracts';
+import type { PondDto, FeedProductDto, FeedingEntryDto, FeedingMealDto } from '@aqualedger/contracts';
+import type { TFunction } from 'i18next';
+
+function FeedingDateSelector({
+  feedingDate,
+  todayISO,
+  yesterdayISO,
+  onDateChange,
+  t,
+}: {
+  feedingDate: string;
+  todayISO: string;
+  yesterdayISO: string;
+  onDateChange: (value: string) => void;
+  t: TFunction;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={() => onDateChange(todayISO)}
+          className={`px-3 py-1 rounded-full text-sm font-medium ${
+            feedingDate === todayISO ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
+          }`}
+        >
+          {t('common.today')}
+        </button>
+        <button
+          type="button"
+          onClick={() => onDateChange(yesterdayISO)}
+          className={`px-3 py-1 rounded-full text-sm font-medium ${
+            feedingDate === yesterdayISO ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
+          }`}
+        >
+          {t('common.yesterday')}
+        </button>
+      </div>
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-xs text-text-secondary shrink-0">{t('feeding.selectDate')}</span>
+        <input
+          type="date"
+          value={feedingDate}
+          max={todayISO}
+          onChange={(e) => onDateChange(e.target.value)}
+          className="input-compact !py-1.5 !text-sm flex-1 min-w-0"
+        />
+      </div>
+    </div>
+  );
+}
 
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
@@ -95,6 +146,12 @@ export function FeedingEntryPage() {
     summary: { totalEntries: number; periodTotalKg: string };
     downloadUrls: { pdf: string; excel: string };
   } | null>(null);
+  const [editingMeal, setEditingMeal] = useState<FeedingMealDto | null>(null);
+  const [editQuantity, setEditQuantity] = useState('');
+  const [editQuantityUnit, setEditQuantityUnit] = useState<QuantityUnit>('kg');
+  const [editMealTime, setEditMealTime] = useState(getDefaultMealTime);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const { data: ponds } = useQuery({
     queryKey: ['ponds', selectedFarmId],
@@ -128,6 +185,8 @@ export function FeedingEntryPage() {
   });
 
   const existingEntry = entryId ? entryById : existingEntryForDate;
+  const canEditCurrentDate = isOwner || isSupervisorEditableDate(feedingDate);
+  const canEditEntry = existingEntry ? existingEntry.isEditable : canEditCurrentDate;
 
   const priorDateISO = addDaysISO(feedingDate, -1);
 
@@ -281,6 +340,50 @@ export function FeedingEntryPage() {
     if (!value || value > todayISO) return;
     setFeedingDate(value);
   };
+
+  const openMealEditor = (meal: FeedingMealDto) => {
+    setEditingMeal(meal);
+    setEditQuantity(meal.feedQuantityKg);
+    setEditQuantityUnit('kg');
+    setEditMealTime(meal.actualTime || getDefaultMealTime());
+    setEditError(null);
+  };
+
+  const closeMealEditor = () => {
+    setEditingMeal(null);
+    setEditQuantity('');
+    setEditError(null);
+  };
+
+  const handleSaveMealEdit = async () => {
+    if (!existingEntry || !editingMeal) return;
+    const qtyKg = toKg(editQuantity, editQuantityUnit);
+    if (!qtyKg || parseFloat(qtyKg) <= 0) return;
+
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const result = await api.patch<FeedingEntryDto>(
+        `/feeding-entries/${existingEntry.id}/meals/${editingMeal.id}`,
+        {
+          feedQuantityKg: qtyKg,
+          actualTime: editMealTime,
+        },
+      );
+      queryClient.setQueryData(['feeding-entry-by-date', selectedPondId, feedingDate], result);
+      await queryClient.invalidateQueries({ queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate] });
+      await queryClient.invalidateQueries({ queryKey: ['feeding-entry', entryId] });
+      await queryClient.invalidateQueries({ queryKey: ['pond-status', selectedFarmId] });
+      await queryClient.invalidateQueries({ queryKey: ['inventory-summary', selectedFarmId] });
+      closeMealEditor();
+    } catch (err) {
+      setEditError(err instanceof ApiError ? err.message : t('common.error'));
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const [editMealHour, editMealMinute] = editMealTime.split(':');
 
   const dayTotalLabel =
     feedingDate === todayISO
@@ -486,7 +589,7 @@ export function FeedingEntryPage() {
               {existingEntry && (
                 <div className="text-right shrink-0">
                   <div className="text-[11px] text-text-secondary leading-none">
-                    {t('feeding.todayTotal')}
+                    {dayTotalLabel}
                   </div>
                   <div className="font-bold text-lg text-text-primary leading-tight">
                     {formatQty(existingEntry.totalDailyFeedKg)}
@@ -495,39 +598,13 @@ export function FeedingEntryPage() {
               )}
             </div>
 
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setFeedingDate(todayISO)}
-                  className={`px-3 py-1 rounded-full text-sm font-medium ${
-                    feedingDate === todayISO ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
-                  }`}
-                >
-                  {t('common.today')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFeedingDate(yesterdayISO)}
-                  className={`px-3 py-1 rounded-full text-sm font-medium ${
-                    feedingDate === yesterdayISO ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
-                  }`}
-                >
-                  {t('common.yesterday')}
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-xs text-text-secondary shrink-0">{t('feeding.date')}</span>
-                <input
-                  type="date"
-                  value={feedingDate}
-                  max={todayISO}
-                  onChange={(e) => handleDateChange(e.target.value)}
-                  className="input-compact !py-1.5 !text-sm w-[160px]"
-                />
-              </div>
-            </div>
+            <FeedingDateSelector
+              feedingDate={feedingDate}
+              todayISO={todayISO}
+              yesterdayISO={yesterdayISO}
+              onDateChange={handleDateChange}
+              t={t}
+            />
 
             <button
               type="button"
@@ -547,6 +624,9 @@ export function FeedingEntryPage() {
                     <th className="p-2 text-left">{t('feeding.mealCol')}</th>
                     <th className="p-2 text-right">{t('feeding.quantity')}</th>
                     <th className="p-2 text-right">{t('feeding.time')}</th>
+                    {canEditEntry && (
+                      <th className="p-2 text-right w-16">{t('common.edit')}</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -555,12 +635,24 @@ export function FeedingEntryPage() {
                       <td className="p-2">{meal.mealNumber}</td>
                       <td className="p-2 text-right font-medium">{formatQty(meal.feedQuantityKg)}</td>
                       <td className="p-2 text-right text-text-secondary">{meal.actualTime || '—'}</td>
+                      {canEditEntry && (
+                        <td className="p-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => openMealEditor(meal)}
+                            className="inline-flex items-center justify-center min-h-touch min-w-touch text-primary"
+                            aria-label={t('feeding.editMeal', { number: meal.mealNumber })}
+                          >
+                            <Pencil size={18} />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
               </table>
               <div className="p-3 border-t border-border flex justify-between items-center bg-primary-light/50">
-                <span className="text-sm font-medium">{t('feeding.todayTotal')}</span>
+                <span className="text-sm font-medium">{dayTotalLabel}</span>
                 <span className="font-bold text-lg">{formatQty(existingEntry.totalDailyFeedKg)}</span>
               </div>
             </div>
@@ -570,9 +662,94 @@ export function FeedingEntryPage() {
             </div>
           )}
 
-          {existingEntry?.isLocked ? (
-            <RecordLockNotice />
-          ) : (
+          {editingMeal && (
+            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+              <div className="card w-full max-w-md space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-lg">
+                    {t('feeding.editMeal', { number: editingMeal.mealNumber })}
+                  </h3>
+                  <button type="button" onClick={closeMealEditor} className="text-text-secondary">
+                    <X size={22} />
+                  </button>
+                </div>
+
+                <div className="flex gap-1">
+                  {(['kg', 'ton'] as QuantityUnit[]).map((u) => (
+                    <button
+                      key={u}
+                      type="button"
+                      onClick={() => setEditQuantityUnit(u)}
+                      className={`px-3 py-1 rounded-full text-sm font-medium ${
+                        editQuantityUnit === u ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
+                      }`}
+                    >
+                      {u === 'kg' ? t('common.kg') : t('common.ton')}
+                    </button>
+                  ))}
+                </div>
+
+                <NumericQuantityInput
+                  value={editQuantity}
+                  onChange={setEditQuantity}
+                  label={t('feeding.quantityKg')}
+                />
+
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-text-secondary shrink-0">{t('feeding.time')}</span>
+                  <select
+                    value={editMealHour}
+                    onChange={(e) => setEditMealTime(`${e.target.value}:${editMealMinute || '00'}`)}
+                    className="input-compact flex-1 min-w-0"
+                  >
+                    {Array.from({ length: 24 }, (_, i) => {
+                      const h = String(i).padStart(2, '0');
+                      return (
+                        <option key={h} value={h}>
+                          {h}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <span className="font-semibold">:</span>
+                  <select
+                    value={editMealMinute}
+                    onChange={(e) => setEditMealTime(`${editMealHour || '00'}:${e.target.value}`)}
+                    className="input-compact w-20 shrink-0"
+                  >
+                    {Array.from({ length: 60 }, (_, i) => {
+                      const m = String(i).padStart(2, '0');
+                      return (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {editError && <p className="text-danger text-sm">{editError}</p>}
+
+                <div className="flex gap-2">
+                  <button type="button" onClick={closeMealEditor} className="btn-secondary flex-1">
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveMealEdit()}
+                    disabled={editSaving || !editQuantity}
+                    className="btn-primary flex-1"
+                  >
+                    {editSaving ? t('common.loading') : t('common.save')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!canEditEntry && <RecordLockNotice />}
+
+          {canEditEntry ? (
             <div className="sticky bottom-0 bg-background pt-2 pb-4 space-y-2">
               <button
                 type="button"
@@ -594,6 +771,12 @@ export function FeedingEntryPage() {
                 {existingEntry ? t('feeding.addMeal') : t('feeding.addFeed')}
               </button>
               <button type="button" onClick={() => navigate('/')} className="btn-secondary">
+                {t('feeding.backHome')}
+              </button>
+            </div>
+          ) : (
+            <div className="sticky bottom-0 bg-background pt-2 pb-4">
+              <button type="button" onClick={() => navigate('/')} className="btn-secondary w-full">
                 {t('feeding.backHome')}
               </button>
             </div>
@@ -757,9 +940,9 @@ export function FeedingEntryPage() {
           </div>
         </div>
 
-        {existingEntry?.isLocked ? (
-          <RecordLockNotice />
-        ) : (
+        {!canEditEntry && <RecordLockNotice />}
+
+        {canEditEntry ? (
         <>
         {feedProducts && feedProducts.length > 0 && !existingEntry && (
           <div className="flex items-center gap-2 flex-wrap">
@@ -809,40 +992,13 @@ export function FeedingEntryPage() {
                 <span className="font-semibold">{formatShortDate(feedingDate)}</span>
               </div>
             ) : (
-              <div className="space-y-2">
-                <div className="flex gap-2 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={() => setFeedingDate(todayISO)}
-                    className={`px-3 py-1 rounded-full text-sm font-medium ${
-                      feedingDate === todayISO ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
-                    }`}
-                  >
-                    {t('common.today')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFeedingDate(yesterdayISO)}
-                    className={`px-3 py-1 rounded-full text-sm font-medium ${
-                      feedingDate === yesterdayISO ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
-                    }`}
-                  >
-                    {t('common.yesterday')}
-                  </button>
-                </div>
-                {isOwner ? (
-                  <input
-                    id="meal-date"
-                    type="date"
-                    value={feedingDate}
-                    max={todayISO}
-                    onChange={(e) => handleDateChange(e.target.value)}
-                    className="input-compact"
-                  />
-                ) : (
-                  <p className="input-compact text-center font-medium">{formatShortDate(feedingDate)}</p>
-                )}
-              </div>
+              <FeedingDateSelector
+                feedingDate={feedingDate}
+                todayISO={todayISO}
+                yesterdayISO={yesterdayISO}
+                onDateChange={handleDateChange}
+                t={t}
+              />
             )}
 
             <div className="flex items-center gap-2 w-full min-w-0">
@@ -947,6 +1103,12 @@ export function FeedingEntryPage() {
           </div>
         </div>
         </>
+        ) : (
+          <div className="sticky bottom-0 bg-background pt-2 pb-4">
+            <button type="button" onClick={goToTankOverview} className="btn-secondary w-full">
+              {t('feeding.viewFeeds')}
+            </button>
+          </div>
         )}
       </div>
     </AppShell>

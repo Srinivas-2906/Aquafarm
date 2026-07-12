@@ -47,6 +47,18 @@ export const feedingMealSchema = z.object({
   remarks: z.string().max(500).optional(),
 });
 
+export const feedingMealUpdateSchema = z
+  .object({
+    feedQuantityKg: decimalKg.optional(),
+    actualTime: z.string().regex(/^\d{2}:\d{2}$/, 'Enter a valid time').optional(),
+    checkTrayRemainingPercentage: z.nativeEnum(CheckTrayOption).optional(),
+    appetiteStatus: z.nativeEnum(AppetiteStatus).optional(),
+    remarks: z.string().max(500).optional(),
+  })
+  .refine((data) => Object.values(data).some((value) => value !== undefined), {
+    message: 'No changes provided',
+  });
+
 const entityId = z.string().min(1).max(100);
 
 export const feedingEntrySchema = z.object({
@@ -112,8 +124,10 @@ export const feedProductSchema = z.object({
   pelletSize: z.string().max(50).optional(),
   bagWeightKg: z.string().regex(/^\d+(\.\d{1,3})?$/),
   supplierName: z.string().max(200).optional(),
-  lowStockThresholdKg: z.string().optional(),
+  lowStockThresholdKg: z.string().regex(/^\d+(\.\d{1,3})?$/).optional(),
 });
+
+export const feedProductUpdateSchema = feedProductSchema.partial();
 
 export const reportFilterSchema = z.object({
   farmId: entityId,

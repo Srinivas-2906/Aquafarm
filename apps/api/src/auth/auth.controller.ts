@@ -9,7 +9,7 @@ import { CurrentUser } from '../common/decorators/auth.decorators';
 import { ConfigService } from '@nestjs/config';
 
 class LoginDto {
-  @ApiProperty({ example: '9876543210' })
+  @ApiProperty({ example: '9985533376' })
   @IsString()
   @Matches(/^[6-9]\d{9}$/)
   phoneNumber!: string;

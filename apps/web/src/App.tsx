@@ -6,7 +6,7 @@ import { SupervisorHomePage } from '@/pages/SupervisorHomePage';
 import { FeedingEntryPage } from '@/pages/FeedingEntryPage';
 import { RecordsPage } from '@/pages/RecordsPage';
 import { InventoryPage } from '@/pages/InventoryPage';
-import { ReceiveFeedPage, DamageFeedPage } from '@/pages/InventoryFormsPage';
+import { ReceiveFeedPage, DamageFeedPage, FeedProductFormPage } from '@/pages/InventoryFormsPage';
 import { OwnerDashboardPage } from '@/pages/OwnerDashboardPage';
 import { ApprovalsPage } from '@/pages/ApprovalsPage';
 import { ReportsPage } from '@/pages/ReportsPage';
@@ -57,6 +57,8 @@ export function App() {
             <Route path="/inventory" element={<ProtectedRoute><InventoryPage /></ProtectedRoute>} />
             <Route path="/inventory/receive" element={<ProtectedRoute><ReceiveFeedPage /></ProtectedRoute>} />
             <Route path="/inventory/damage" element={<ProtectedRoute><DamageFeedPage /></ProtectedRoute>} />
+            <Route path="/inventory/feeds/new" element={<ProtectedRoute ownerOnly><FeedProductFormPage /></ProtectedRoute>} />
+            <Route path="/inventory/feeds/:feedProductId/edit" element={<ProtectedRoute ownerOnly><FeedProductFormPage /></ProtectedRoute>} />
             <Route path="/approvals" element={<ProtectedRoute ownerOnly><ApprovalsPage /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute ownerOnly><ReportsPage /></ProtectedRoute>} />
             <Route path="/net" element={<ProtectedRoute ownerOnly><NetPage /></ProtectedRoute>} />

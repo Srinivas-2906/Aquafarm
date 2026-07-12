@@ -19,36 +19,84 @@ async function main() {
     },
   });
 
-  const ownerPin = await bcrypt.hash('123456', 12);
-  const supervisorPin = await bcrypt.hash('654321', 12);
+  const demoPin = await bcrypt.hash('123456', 12);
 
-  const owner = await prisma.user.upsert({
-    where: { organizationId_phoneNumber: { organizationId: org.id, phoneNumber: '9876543210' } },
-    update: {},
-    create: {
-      organizationId: org.id,
-      phoneNumber: '9876543210',
+  const demoUsers = [
+    {
+      phoneNumber: '9985533376',
+      legacyPhoneNumber: '9876543210',
       displayName: 'Demo Owner',
-      role: 'OWNER',
-      pinHash: ownerPin,
-      preferredLanguage: 'en',
-      status: 'ACTIVE',
+      role: 'OWNER' as const,
     },
-  });
-
-  const supervisor = await prisma.user.upsert({
-    where: { organizationId_phoneNumber: { organizationId: org.id, phoneNumber: '9876543211' } },
-    update: {},
-    create: {
-      organizationId: org.id,
-      phoneNumber: '9876543211',
+    {
+      phoneNumber: '9008747926',
+      legacyPhoneNumber: '9876543211',
       displayName: 'Demo Supervisor',
-      role: 'SUPERVISOR',
-      pinHash: supervisorPin,
-      preferredLanguage: 'en',
-      status: 'ACTIVE',
+      role: 'SUPERVISOR' as const,
     },
-  });
+  ];
+
+  const ensuredUsers = [];
+  for (const demoUser of demoUsers) {
+    const legacy = await prisma.user.findUnique({
+      where: {
+        organizationId_phoneNumber: {
+          organizationId: org.id,
+          phoneNumber: demoUser.legacyPhoneNumber,
+        },
+      },
+    });
+
+    if (legacy) {
+      ensuredUsers.push(
+        await prisma.user.update({
+          where: { id: legacy.id },
+          data: {
+            phoneNumber: demoUser.phoneNumber,
+            displayName: demoUser.displayName,
+            role: demoUser.role,
+            pinHash: demoPin,
+            preferredLanguage: 'en',
+            status: 'ACTIVE',
+          },
+        }),
+      );
+      continue;
+    }
+
+    ensuredUsers.push(
+      await prisma.user.upsert({
+        where: {
+          organizationId_phoneNumber: {
+            organizationId: org.id,
+            phoneNumber: demoUser.phoneNumber,
+          },
+        },
+        update: {
+          displayName: demoUser.displayName,
+          role: demoUser.role,
+          pinHash: demoPin,
+          preferredLanguage: 'en',
+          status: 'ACTIVE',
+        },
+        create: {
+          organizationId: org.id,
+          phoneNumber: demoUser.phoneNumber,
+          displayName: demoUser.displayName,
+          role: demoUser.role,
+          pinHash: demoPin,
+          preferredLanguage: 'en',
+          status: 'ACTIVE',
+        },
+      }),
+    );
+  }
+
+  const owner = ensuredUsers.find((user) => user.role === 'OWNER');
+  const supervisor = ensuredUsers.find((user) => user.role === 'SUPERVISOR');
+  if (!owner || !supervisor) {
+    throw new Error('Failed to seed demo owner and supervisor users');
+  }
 
   const farm = await prisma.farm.upsert({
     where: { id: 'demo-farm-001' },
@@ -306,8 +354,8 @@ async function main() {
   console.log('Seed complete!');
   console.log('');
   console.log('=== DEVELOPMENT CREDENTIALS (DO NOT USE IN PRODUCTION) ===');
-  console.log('Owner:      Phone 9876543210  PIN 123456');
-  console.log('Supervisor: Phone 9876543211  PIN 654321');
+  console.log('Owner:      Phone 9985533376  PIN 123456');
+  console.log('Supervisor: Phone 9008747926  PIN 123456');
   console.log('OTP Mock:   123456');
   console.log('Farm ID:    demo-farm-001');
 }

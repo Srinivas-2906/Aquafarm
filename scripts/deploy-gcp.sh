@@ -180,6 +180,6 @@ DNS for ${DOMAIN_WEB} should point to the Kaana load balancer IP (34.36.130.96).
 SSL cert provisioning may take up to 30 minutes on first deploy.
 
 Demo login:
-  Owner:      9876543210 / 123456
-  Supervisor: 9876543211 / 654321
+  Owner:      9985533376 / 123456
+  Supervisor: 9008747926 / 123456
 EOF

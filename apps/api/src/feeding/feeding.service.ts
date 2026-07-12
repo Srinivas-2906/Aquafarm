@@ -11,12 +11,11 @@ import { InventoryService } from '../inventory/inventory.service';
 import {
   calculateDoc,
   isDateEditableBySupervisor,
-  isLateOfflineSubmission,
   sumDecimals,
   decimalToString,
   getFarmToday,
 } from '../common/utils/date.utils';
-import { feedingEntrySchema } from '@aqualedger/validation';
+import { feedingEntrySchema, feedingMealUpdateSchema } from '@aqualedger/validation';
 import type { FeedingEntryDto } from '@aqualedger/contracts';
 import { UserRole, FeedingEntryStatus, SubmissionType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
@@ -66,12 +65,11 @@ export class FeedingService {
     }
 
     const doc = calculateDoc(cycle.stockingDate, feedingDate);
-    const isLate = isLateOfflineSubmission(feedingDate, farm.timezone);
     const isSupervisor = userRole === UserRole.SUPERVISOR;
 
-    if (isSupervisor && !isDateEditableBySupervisor(feedingDate, farm.timezone) && !isLate) {
+    if (isSupervisor && !isDateEditableBySupervisor(feedingDate, farm.timezone)) {
       throw new ForbiddenException(
-        'This entry is older than two days. Only the owner can make changes.',
+        'Supervisors can only enter or change feeding for today and yesterday. Ask the owner for older dates.',
       );
     }
 
@@ -86,12 +84,8 @@ export class FeedingService {
       throw new ConflictException('A feeding entry already exists for this pond and date');
     }
 
-    let status: FeedingEntryStatus = 'CONFIRMED';
-    let submissionType: SubmissionType = 'NORMAL';
-    if (isLate && isSupervisor) {
-      status = 'PENDING_OWNER_APPROVAL';
-      submissionType = 'LATE_OFFLINE_SUBMISSION';
-    }
+    const status: FeedingEntryStatus = 'CONFIRMED';
+    const submissionType: SubmissionType = 'NORMAL';
 
     const entry = await this.prisma.feedingEntry.create({
       data: {
@@ -235,6 +229,113 @@ export class FeedingService {
     });
 
     return this.mapEntry(updated, userRole, entry.farm.timezone);
+  }
+
+  async updateMeal(
+    entryId: string,
+    mealId: string,
+    input: Record<string, unknown>,
+    userId: string,
+    userRole: UserRole,
+  ) {
+    const parsed = feedingMealUpdateSchema.safeParse(input);
+    if (!parsed.success) {
+      const message = parsed.error.errors.map((e) => e.message).join(', ');
+      throw new BadRequestException(message || 'Invalid meal update');
+    }
+
+    const entry = await this.prisma.feedingEntry.findUnique({
+      where: { id: entryId },
+      include: { meals: true, farm: true, pond: true, feedProduct: true, enteredBy: true },
+    });
+    if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.status === 'VOIDED') {
+      throw new BadRequestException('Cannot edit meals on a voided entry');
+    }
+
+    this.checkEditPermission(entry, userRole, entry.farm.timezone);
+
+    const meal = entry.meals.find((m) => m.id === mealId);
+    if (!meal) throw new NotFoundException('Meal not found');
+
+    const previousValue = {
+      feedQuantityKg: meal.feedQuantityKg.toString(),
+      actualTime: meal.actualTime,
+      checkTrayRemainingPercentage: meal.checkTrayRemainingPercentage,
+      appetiteStatus: meal.appetiteStatus,
+      remarks: meal.remarks,
+    };
+
+    await this.prisma.feedingMeal.update({
+      where: { id: mealId },
+      data: {
+        feedQuantityKg: parsed.data.feedQuantityKg,
+        actualTime: parsed.data.actualTime,
+        checkTrayRemainingPercentage: parsed.data.checkTrayRemainingPercentage as never,
+        appetiteStatus: parsed.data.appetiteStatus as never,
+        remarks: parsed.data.remarks,
+      },
+    });
+
+    const updated = await this.prisma.feedingEntry.update({
+      where: { id: entryId },
+      data: { version: { increment: 1 } },
+      include: { meals: true, pond: true, feedProduct: true, enteredBy: true, farm: true },
+    });
+
+    await this.resyncFeedConsumed(updated, userId);
+
+    await this.audit.log({
+      organizationId: entry.organizationId,
+      farmId: entry.farmId,
+      userId,
+      entityType: 'FEEDING_MEAL',
+      entityId: mealId,
+      action: 'UPDATE',
+      previousValue,
+      newValue: parsed.data as Record<string, unknown>,
+    });
+
+    return this.mapEntry(updated, userRole, entry.farm.timezone);
+  }
+
+  private async resyncFeedConsumed(
+    entry: {
+      id: string;
+      farmId: string;
+      organizationId: string;
+      feedProductId: string;
+      pondId: string;
+      feedingDate: Date;
+      status: FeedingEntryStatus;
+      meals: Array<{ feedQuantityKg: { toString(): string } }>;
+    },
+    userId: string,
+  ) {
+    if (entry.status !== 'CONFIRMED') return;
+
+    const confirmed = await this.prisma.inventoryTransaction.findMany({
+      where: { feedingEntryId: entry.id, type: 'FEED_CONSUMED', status: 'CONFIRMED' },
+    });
+
+    for (const _ of confirmed) {
+      await this.inventory.reverseFeedConsumed(entry.id, userId, 'Feeding correction');
+    }
+
+    const totalTdf = sumDecimals(entry.meals.map((m) => m.feedQuantityKg));
+    if (parseFloat(totalTdf) > 0) {
+      await this.inventory.createFeedConsumed({
+        farmId: entry.farmId,
+        organizationId: entry.organizationId,
+        feedProductId: entry.feedProductId,
+        pondId: entry.pondId,
+        feedingEntryId: entry.id,
+        quantityKg: totalTdf,
+        transactionDate: entry.feedingDate.toISOString().split('T')[0],
+        userId,
+        clientTransactionId: uuidv4(),
+      });
+    }
   }
 
   async findAll(filters: {
@@ -427,7 +528,7 @@ export class FeedingService {
     }
     if (!isDateEditableBySupervisor(entry.feedingDate, timezone)) {
       throw new ForbiddenException(
-        'This entry is older than two days. Only the owner can make changes.',
+        'Supervisors can only enter or change feeding for today and yesterday. Ask the owner for older dates.',
       );
     }
   }
@@ -510,7 +611,7 @@ export class FeedingService {
       isEditable,
       isLocked,
       lockMessage: isLocked
-        ? 'This entry is older than two days. Only the owner can make changes.'
+        ? 'Supervisors can only change feeding for today and yesterday. Ask the owner for older dates.'
         : undefined,
       deviceCreatedAt: entry.deviceCreatedAt?.toISOString() ?? null,
       serverCreatedAt: entry.serverCreatedAt.toISOString(),

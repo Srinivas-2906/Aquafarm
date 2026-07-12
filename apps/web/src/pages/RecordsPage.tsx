@@ -1,18 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Lock, Edit, Eye } from 'lucide-react';
+import { Edit, Eye } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
 import { getTodayISO, getYesterdayISO, formatDate } from '@/lib/utils';
 import type { FeedingEntryDto } from '@aqualedger/contracts';
-import { UserRole } from '@/types/roles';
 
 export function RecordsPage() {
   const { t } = useTranslation();
-  const { selectedFarmId, user } = useAuth();
+  const { selectedFarmId } = useAuth();
   const today = getTodayISO();
   const yesterday = getYesterdayISO();
   const weekAgo = new Date();
@@ -26,8 +25,6 @@ export function RecordsPage() {
       ),
     enabled: !!selectedFarmId,
   });
-
-  const isOwner = user?.role === UserRole.OWNER;
 
   return (
     <AppShell title={t('records.title')}>
@@ -60,7 +57,7 @@ export function RecordsPage() {
                     {entry.meals.length} meals — {entry.enteredByName}
                   </p>
                 </div>
-                {entry.isEditable || isOwner ? (
+                {entry.isEditable ? (
                   <Link
                     to={`/feeding/entry/${entry.id}`}
                     className="flex items-center gap-1 text-primary font-medium min-h-touch px-3"
@@ -69,14 +66,17 @@ export function RecordsPage() {
                     {t('records.edit')}
                   </Link>
                 ) : (
-                  <span className="flex items-center gap-1 text-text-secondary min-h-touch px-3">
-                    <Lock size={18} />
+                  <Link
+                    to={`/feeding/entry/${entry.id}`}
+                    className="flex items-center gap-1 text-text-secondary min-h-touch px-3"
+                  >
+                    <Eye size={18} />
                     {t('records.view')}
-                  </span>
+                  </Link>
                 )}
               </div>
-              {entry.isLocked && !isOwner && (
-                <p className="text-xs text-warning mt-2">{t('feeding.lockedMessage')}</p>
+              {entry.isLocked && (
+                <p className="text-xs text-warning mt-2">{t('feeding.askOwner')}</p>
               )}
             </div>
           );
