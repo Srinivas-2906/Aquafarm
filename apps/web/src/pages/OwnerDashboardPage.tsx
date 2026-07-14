@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
+import { AddTankButton } from '@/components/AddTankButton';
 import { PondCard } from '@/components/PondCard';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
+import { formatQty } from '@/lib/utils';
 import type { DashboardSummaryDto } from '@aqualedger/contracts';
 
 export function OwnerDashboardPage() {
@@ -19,43 +19,32 @@ export function OwnerDashboardPage() {
   });
 
   return (
-    <AppShell title={t('dashboard.title')}>
+    <AppShell farmSelector>
       <div className="px-4 py-4 space-y-4">
         {isLoading && <p className="text-center py-8">{t('common.loading')}</p>}
         {data && (
           <>
             <div className="grid grid-cols-2 gap-3">
-              <StatCard label={t('dashboard.feedToday')} value={`${data.totalFeedTodayKg} kg`} />
-              <StatCard label={t('dashboard.stock')} value={`${data.currentFeedStockKg} kg`} />
-              <StatCard label={t('dashboard.pending')} value={String(data.pendingApprovals)} highlight={data.pendingApprovals > 0} />
-              <StatCard label="Active Tanks" value={String(data.activePonds)} />
+              <StatCard
+                label={t('dashboard.feedUsed')}
+                value={`${formatQty(data.totalFeedUsedKg)}`}
+              />
+              <StatCard label={t('dashboard.stock')} value={`${formatQty(data.currentFeedStockKg)}`} />
             </div>
 
-            {data.attentionItems.length > 0 && (
-              <div>
-                <h3 className="font-semibold mb-2 flex items-center gap-2">
-                  <AlertTriangle size={18} className="text-warning" />
-                  {t('dashboard.attention')}
-                </h3>
-                <div className="space-y-2">
-                  {data.attentionItems.map((item, i) => (
-                    <div key={i} className={`card text-sm ${item.severity === 'danger' ? 'border-danger' : 'border-warning'}`}>
-                      <p className="font-medium">{item.title}</p>
-                      <p className="text-text-secondary">{item.description}</p>
-                    </div>
-                  ))}
-                </div>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-semibold">{t('tanks.title')}</h3>
+              <AddTankButton compact />
+            </div>
+
+            {data.pondStatuses.length === 0 && (
+              <div className="card space-y-3">
+                <p className="text-sm text-text-secondary">{t('tanks.noTanks')}</p>
+                <AddTankButton />
               </div>
             )}
 
-            {data.pendingApprovals > 0 && (
-              <Link to="/approvals" className="btn-primary text-center block">
-                {t('approvals.title')} ({data.pendingApprovals})
-              </Link>
-            )}
-
-            <h3 className="font-semibold">Today's Tanks</h3>
-            <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
               {data.pondStatuses.map((pond) => <PondCard key={pond.pondId} pond={pond} />)}
             </div>
           </>
@@ -65,9 +54,9 @@ export function OwnerDashboardPage() {
   );
 }
 
-function StatCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className={`card ${highlight ? 'border-warning bg-warning/5' : ''}`}>
+    <div className="card">
       <p className="text-xs text-text-secondary">{label}</p>
       <p className="text-xl font-bold">{value}</p>
     </div>

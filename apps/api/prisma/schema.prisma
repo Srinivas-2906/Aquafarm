@@ -157,6 +157,7 @@ model User {
   displayName       String
   role              UserRole
   pinHash           String
+  mustChangePin     Boolean    @default(false)
   preferredLanguage Language   @default(en)
   status            UserStatus @default(ACTIVE)
   activationCode    String?

@@ -46,8 +46,11 @@ export class ReportsController {
   }
 
   @Get(':id')
-  async getReport(@Param('id') id: string) {
-    return this.reports.getReport(id);
+  async getReport(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.reports.getReport(id, organizationId);
   }
 
   @Get(':id/download')
@@ -55,8 +58,9 @@ export class ReportsController {
     @Param('id') id: string,
     @Query('format') format: 'pdf' | 'excel' = 'pdf',
     @Res() res: Response,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
-    await this.reports.getReport(id);
+    await this.reports.getReport(id, organizationId);
     const filePath = this.reports.getReportFilePath(id, format);
     if (!fs.existsSync(filePath)) {
       throw new NotFoundException('Report file not found');

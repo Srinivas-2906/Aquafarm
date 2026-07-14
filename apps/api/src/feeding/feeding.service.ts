@@ -14,6 +14,7 @@ import {
   sumDecimals,
   decimalToString,
   getFarmToday,
+  parseDateOnly,
 } from '../common/utils/date.utils';
 import { feedingEntrySchema, feedingMealUpdateSchema } from '@aqualedger/validation';
 import type { FeedingEntryDto } from '@aqualedger/contracts';
@@ -27,6 +28,77 @@ export class FeedingService {
     private audit: AuditService,
     private inventory: InventoryService,
   ) {}
+
+  async updateEntry(
+    entryId: string,
+    input: Record<string, unknown>,
+    userId: string,
+    userRole: UserRole,
+  ) {
+    const feedProductId = input.feedProductId;
+    if (typeof feedProductId !== 'string' || !feedProductId) {
+      throw new BadRequestException('feedProductId is required');
+    }
+
+    const entry = await this.prisma.feedingEntry.findUnique({
+      where: { id: entryId },
+      include: { meals: true, farm: true, feedProduct: true, pond: true, enteredBy: true },
+    });
+    if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.status === 'VOIDED') throw new BadRequestException('Cannot edit a voided entry');
+
+    this.checkEditPermission(entry, userRole, entry.farm.timezone);
+
+    const product = await this.prisma.feedProduct.findFirst({
+      where: { id: feedProductId, farmId: entry.farmId, organizationId: entry.organizationId, status: 'ACTIVE' },
+    });
+    if (!product) throw new NotFoundException('Feed product not found');
+
+    if (entry.feedProductId === feedProductId) {
+      const mapped = await this.prisma.feedingEntry.findUnique({
+        where: { id: entryId },
+        include: { meals: { orderBy: { mealNumber: 'asc' } }, pond: true, feedProduct: true, enteredBy: true, farm: true },
+      });
+      if (!mapped) throw new NotFoundException('Entry not found');
+      return this.mapEntry(mapped, userRole, entry.farm.timezone);
+    }
+
+    // Inventory correction: reverse previous consumption and apply to new feed product.
+    if (entry.status === 'CONFIRMED') {
+      const tdf = sumDecimals(entry.meals.map((m) => m.feedQuantityKg));
+      await this.inventory.reverseFeedConsumed(entry.id, userId, 'Feed code correction');
+      await this.inventory.createFeedConsumed({
+        farmId: entry.farmId,
+        organizationId: entry.organizationId,
+        feedProductId,
+        pondId: entry.pondId,
+        feedingEntryId: entry.id,
+        quantityKg: tdf,
+        transactionDate: entry.feedingDate.toISOString().split('T')[0],
+        userId,
+        clientTransactionId: uuidv4(),
+      });
+    }
+
+    const updated = await this.prisma.feedingEntry.update({
+      where: { id: entryId },
+      data: { feedProductId, version: { increment: 1 } },
+      include: { meals: { orderBy: { mealNumber: 'asc' } }, pond: true, feedProduct: true, enteredBy: true, farm: true },
+    });
+
+    await this.audit.log({
+      organizationId: entry.organizationId,
+      farmId: entry.farmId,
+      userId,
+      entityType: 'FEEDING_ENTRY',
+      entityId: entryId,
+      action: 'UPDATE',
+      previousValue: { feedProductId: entry.feedProductId },
+      newValue: { feedProductId },
+    });
+
+    return this.mapEntry(updated, userRole, entry.farm.timezone);
+  }
 
   async create(
     input: Record<string, unknown>,
@@ -59,11 +131,7 @@ export class FeedingService {
       throw new BadRequestException('No active culture cycle for this pond');
     }
 
-    const feedingDate = new Date(data.feedingDate);
-    if (feedingDate < cycle.stockingDate) {
-      throw new BadRequestException('Feeding date cannot be before stocking date');
-    }
-
+    const feedingDate = parseDateOnly(data.feedingDate);
     const doc = calculateDoc(cycle.stockingDate, feedingDate);
     const isSupervisor = userRole === UserRole.SUPERVISOR;
 
@@ -356,8 +424,8 @@ export class FeedingService {
     if (filters.status) where.status = filters.status;
     if (filters.dateFrom || filters.dateTo) {
       where.feedingDate = {};
-      if (filters.dateFrom) (where.feedingDate as Record<string, Date>).gte = new Date(filters.dateFrom);
-      if (filters.dateTo) (where.feedingDate as Record<string, Date>).lte = new Date(filters.dateTo);
+      if (filters.dateFrom) (where.feedingDate as Record<string, Date>).gte = parseDateOnly(filters.dateFrom);
+      if (filters.dateTo) (where.feedingDate as Record<string, Date>).lte = parseDateOnly(filters.dateTo);
     }
 
     const [entries, total] = await Promise.all([
@@ -445,10 +513,14 @@ export class FeedingService {
     return this.mapEntry(updated, userRole, entry.farm.timezone);
   }
 
-  async getCumulativeFeed(cultureCycleId: string, upToDate?: Date): Promise<string> {
+  async getCumulativeFeed(
+    cultureCycleId: string,
+    upToDate?: Date,
+    statuses: FeedingEntryStatus[] = ['CONFIRMED'],
+  ): Promise<string> {
     const where: Record<string, unknown> = {
       cultureCycleId,
-      status: 'CONFIRMED',
+      status: { in: statuses },
     };
     if (upToDate) {
       where.feedingDate = { lte: upToDate };
@@ -461,6 +533,21 @@ export class FeedingService {
 
     const allMeals = entries.flatMap((e) => e.meals.map((m) => m.feedQuantityKg));
     return sumDecimals(allMeals);
+  }
+
+  async getFarmTotalFeedUsed(farmId: string): Promise<string> {
+    const result = await this.prisma.feedingMeal.aggregate({
+      where: {
+        feedingEntry: {
+          farmId,
+          status: { not: 'VOIDED' },
+        },
+      },
+      _sum: { feedQuantityKg: true },
+    });
+
+    if (!result._sum.feedQuantityKg) return '0.000';
+    return decimalToString(result._sum.feedQuantityKg);
   }
 
   async getPondTodayStatuses(farmId: string, timezone: string) {

@@ -1,9 +1,8 @@
 import type { PondTodayStatusDto } from '@aqualedger/contracts';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { Plus, CheckCircle } from 'lucide-react';
-import { SyncStatusBadge } from './SyncStatusBadge';
-import { cn, formatShortDate, formatQty } from '@/lib/utils';
+import { Plus } from 'lucide-react';
+import { cn, formatQty } from '@/lib/utils';
 
 interface PondCardProps {
   pond: PondTodayStatusDto;
@@ -12,41 +11,36 @@ interface PondCardProps {
 export function PondCard({ pond }: PondCardProps) {
   const { t } = useTranslation();
 
-  const mealLabel = pond.hasEntryToday
-    ? pond.isComplete
-      ? t('home.feedingComplete')
-      : t('home.mealsProgress', { entered: pond.mealsEntered, total: pond.usualMealsPerDay })
-    : t('home.noMeals');
-
   return (
-    <div className={cn('card', !pond.hasEntryToday && 'border-accent border-2')}>
-      <div className="flex justify-between items-start mb-2">
-        <div>
-          <h3 className="text-xl font-bold text-primary">{pond.pondName}</h3>
-          {pond.doc && (
-            <span className="text-sm text-text-secondary">{t('home.doc', { doc: pond.doc })}</span>
-          )}
+    <div
+      className={cn(
+        'card flex flex-col min-h-[140px] border-2',
+        pond.hasEntryToday ? 'border-primary/25 bg-surface' : 'border-accent bg-accent/5',
+      )}
+    >
+      <div className="mb-2 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h3 className="text-base font-bold text-primary leading-tight truncate">{pond.pondName}</h3>
+          <span className="rounded-md bg-primary text-white text-[11px] font-bold px-2 py-0.5 shrink-0">
+            #{pond.pondCode}
+          </span>
         </div>
-        {pond.syncStatus && <SyncStatusBadge status={pond.syncStatus} />}
       </div>
 
-      <div className="space-y-1 mb-3">
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-text-secondary">
-          <span>{formatShortDate(new Date().toISOString())}</span>
-          {pond.doc != null && <span>DOC {pond.doc}</span>}
-          {pond.feedCode && <span>{pond.feedCode}</span>}
-        </div>
+      <div className="space-y-1 mb-3 flex-1">
         {pond.hasEntryToday ? (
-          <p className="text-lg font-semibold">
+          <p className="text-base font-semibold">
             {t('home.todayFeed', { qty: formatQty(pond.todayTotalFeedKg) })}
           </p>
         ) : (
-          <p className="text-accent font-medium">No feeding recorded today</p>
+          <p className="text-accent font-medium text-sm">{t('home.noFeedToday')}</p>
         )}
-        <p className="text-sm text-text-secondary">{mealLabel}</p>
-        {pond.lastMealTime && (
+        <p className="text-sm text-text-secondary">
+          {t('home.feedCount', { count: pond.mealsEntered })}
+        </p>
+        {pond.feedCode && (
           <p className="text-xs text-text-secondary">
-            {t('feeding.lastMeal', { time: pond.lastMealTime, qty: formatQty(pond.lastMealQuantityKg || '0') })}
+            {t('feeding.feedCode')}: <span className="font-medium text-text-primary">{pond.feedCode}</span>
           </p>
         )}
       </div>
@@ -54,31 +48,15 @@ export function PondCard({ pond }: PondCardProps) {
       <Link
         to={`/feeding/entry?pondId=${pond.pondId}`}
         className={cn(
-          'flex items-center justify-center gap-2 min-h-touch rounded-lg font-semibold text-base',
+          'flex items-center justify-center gap-1.5 min-h-touch rounded-lg font-semibold text-sm',
           pond.hasEntryToday
             ? 'bg-primary-light text-primary border border-primary'
             : 'bg-accent text-white',
         )}
       >
-        {pond.hasEntryToday ? (
-          <>
-            <Plus size={20} />
-            {t('feeding.viewFeeds')}
-          </>
-        ) : (
-          <>
-            <Plus size={20} />
-            {t('feeding.addFeed')}
-          </>
-        )}
+        <Plus size={18} />
+        {pond.hasEntryToday ? t('feeding.viewFeeds') : t('feeding.addFeed')}
       </Link>
-
-      {pond.isComplete && (
-        <div className="flex items-center gap-1 mt-2 text-success text-sm">
-          <CheckCircle size={16} />
-          {t('home.feedingComplete')}
-        </div>
-      )}
     </div>
   );
 }

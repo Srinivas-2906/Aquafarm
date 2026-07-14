@@ -1,8 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { FeedProductsService } from '../feed-products/feed-products.service';
 import { getTransactionDirection, decimalToString, sumDecimals } from '../common/utils/date.utils';
-import { inventoryTransactionSchema } from '@aqualedger/validation';
+import { inventoryTransactionSchema, setFarmInventoryTotalSchema } from '@aqualedger/validation';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
@@ -10,6 +11,8 @@ export class InventoryService {
   constructor(
     private prisma: PrismaService,
     private audit: AuditService,
+    @Inject(forwardRef(() => FeedProductsService))
+    private feedProducts: FeedProductsService,
   ) {}
 
   async getProductBalance(feedProductId: string): Promise<string> {
@@ -23,6 +26,94 @@ export class InventoryService {
       balance += t.direction === 'IN' ? qty : -qty;
     }
     return balance.toFixed(3);
+  }
+
+  async getFarmTotal(farmId: string) {
+    const summary = await this.getSummary(farmId);
+    return {
+      farmId,
+      totalStockKg: sumDecimals(summary.map((p) => p.currentStockKg)),
+    };
+  }
+
+  async setFarmTotal(
+    input: Record<string, unknown>,
+    userId: string,
+    organizationId: string,
+  ) {
+    const parsed = setFarmInventoryTotalSchema.safeParse(input);
+    if (!parsed.success) {
+      const message = parsed.error.errors.map((e) => e.message).join(', ');
+      throw new BadRequestException(message || 'Invalid inventory total');
+    }
+
+    const { farmId, quantityKg } = parsed.data;
+    const farm = await this.prisma.farm.findFirst({
+      where: { id: farmId, organizationId, status: 'ACTIVE' },
+    });
+    if (!farm) {
+      throw new NotFoundException('Farm not found');
+    }
+
+    await this.feedProducts.findByFarm(farmId);
+
+    const products = await this.prisma.feedProduct.findMany({
+      where: { farmId, status: 'ACTIVE' },
+      orderBy: { feedCode: 'asc' },
+    });
+    if (!products.length) {
+      throw new BadRequestException('No feed products found for this farm');
+    }
+
+    const current = await this.getFarmTotal(farmId);
+    const target = parseFloat(quantityKg);
+    if (Math.abs(target - parseFloat(current.totalStockKg)) < 0.001) {
+      return current;
+    }
+
+    const primary = products[0];
+    const today = new Date().toISOString().split('T')[0];
+
+    for (const product of products) {
+      if (product.id === primary.id) continue;
+
+      const balance = parseFloat(await this.getProductBalance(product.id));
+      if (Math.abs(balance) < 0.001) continue;
+
+      await this.createTransaction(
+        {
+          clientTransactionId: uuidv4(),
+          farmId,
+          feedProductId: product.id,
+          type: balance > 0 ? 'MANUAL_ADJUSTMENT_OUT' : 'MANUAL_ADJUSTMENT_IN',
+          quantityKg: Math.abs(balance).toFixed(3),
+          transactionDate: today,
+          remarks: 'Manual farm stock adjustment',
+        },
+        userId,
+        organizationId,
+      );
+    }
+
+    const primaryBalance = parseFloat(await this.getProductBalance(primary.id));
+    const delta = target - primaryBalance;
+    if (Math.abs(delta) >= 0.001) {
+      await this.createTransaction(
+        {
+          clientTransactionId: uuidv4(),
+          farmId,
+          feedProductId: primary.id,
+          type: delta > 0 ? 'MANUAL_ADJUSTMENT_IN' : 'MANUAL_ADJUSTMENT_OUT',
+          quantityKg: Math.abs(delta).toFixed(3),
+          transactionDate: today,
+          remarks: 'Manual farm stock adjustment',
+        },
+        userId,
+        organizationId,
+      );
+    }
+
+    return this.getFarmTotal(farmId);
   }
 
   async getSummary(farmId: string) {

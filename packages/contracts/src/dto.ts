@@ -21,6 +21,7 @@ export interface AuthUser {
   role: UserRole;
   preferredLanguage: Language;
   status: UserStatus;
+  mustChangePin: boolean;
   farms: FarmAccess[];
 }
 
@@ -152,6 +153,11 @@ export interface InventorySummaryDto {
   isLowStock: boolean;
 }
 
+export interface FarmInventoryTotalDto {
+  farmId: string;
+  totalStockKg: string;
+}
+
 export interface PondTodayStatusDto {
   pondId: string;
   pondName: string;
@@ -172,6 +178,7 @@ export interface PondTodayStatusDto {
 export interface DashboardSummaryDto {
   activePonds: number;
   totalFeedTodayKg: string;
+  totalFeedUsedKg: string;
   currentFeedStockKg: string;
   pendingApprovals: number;
   unsyncedRecords: number;

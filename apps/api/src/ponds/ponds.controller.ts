@@ -1,7 +1,8 @@
-import { Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PondsService } from './ponds.service';
-import { JwtAuthGuard } from '../common/guards/auth.guards';
+import { FarmAccessGuard, JwtAuthGuard } from '../common/guards/auth.guards';
+import { CurrentUser, RequireFarmAccess } from '../common/decorators/auth.decorators';
 
 @ApiTags('ponds')
 @Controller()
@@ -15,6 +16,18 @@ export class PondsController {
     return this.ponds.findByFarm(farmId);
   }
 
+  // Anyone with access to the farm can add tanks/ponds.
+  @Post('farms/:farmId/ponds')
+  @UseGuards(FarmAccessGuard)
+  @RequireFarmAccess()
+  async create(
+    @Param('farmId') farmId: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.ponds.create({ farmId, organizationId, input: body });
+  }
+
   @Get('ponds/:pondId')
   async findOne(@Param('pondId') pondId: string) {
     return this.ponds.findOne(pondId);
@@ -24,5 +37,13 @@ export class PondsController {
   async getActiveCycle(@Param('pondId') pondId: string) {
     const pond = await this.ponds.findOne(pondId);
     return pond?.activeCycle || null;
+  }
+
+  @Post('ponds/:pondId/culture-cycle')
+  async ensureActiveCycle(
+    @Param('pondId') pondId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.ponds.ensureActiveCycle(pondId, organizationId);
   }
 }

@@ -9,7 +9,28 @@ import { api } from '@/lib/api';
 import type { FeedProductDto, PondDto } from '@aqualedger/contracts';
 import { addDaysISO, getTodayISO, getYesterdayISO } from '@/lib/utils';
 
-const API_URL = import.meta.env.VITE_API_URL || '/api';
+type FeedingReportRow = {
+  date: string;
+  doc: number | string;
+  feedCode: string;
+  meal1: string;
+  meal2: string;
+  meal3: string;
+  meal4: string;
+  meal5: string;
+  tdf: string;
+  cumulative: string;
+  checkTray: string;
+  remarks: string;
+  pondName: string;
+};
+
+type FeedingReport = {
+  id: string;
+  rows: FeedingReportRow[];
+  summary: { totalEntries: number; periodTotalKg: string };
+  downloadUrls: { pdf: string; excel: string };
+};
 
 export function ReportsPage() {
   const { t } = useTranslation();
@@ -29,20 +50,15 @@ export function ReportsPage() {
 
   const [dateFrom, setDateFrom] = useState(() => {
     if (initialFrom) return initialFrom;
-    const d = new Date();
-    d.setDate(d.getDate() - 14);
-    return d.toISOString().split('T')[0];
+    return last14From;
   });
-  const [dateTo, setDateTo] = useState(() => initialTo || new Date().toISOString().split('T')[0]);
+  const [dateTo, setDateTo] = useState(() => initialTo || todayISO);
   const [pondId, setPondId] = useState(() => initialPondId);
   const [feedProductId, setFeedProductId] = useState(() => initialFeedProductId);
   const [showFilters, setShowFilters] = useState(() => !!initialPondId || !!initialFeedProductId);
-  const [report, setReport] = useState<{
-    id: string;
-    rows: Array<Record<string, unknown>>;
-    summary: { totalEntries: number; periodTotalKg: string };
-    downloadUrls: { pdf: string; excel: string };
-  } | null>(null);
+  const [report, setReport] = useState<FeedingReport | null>(null);
+  const [showAllRows, setShowAllRows] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState<'pdf' | 'excel' | null>(null);
 
   const { data: ponds } = useQuery({
     queryKey: ['ponds', selectedFarmId],
@@ -59,9 +75,11 @@ export function ReportsPage() {
   const pondLabel = useMemo(() => ponds?.find((p) => p.id === pondId)?.name || '', [ponds, pondId]);
   const feedLabel = useMemo(() => feedProducts?.find((p) => p.id === feedProductId)?.feedCode || '', [feedProducts, feedProductId]);
 
+  const isDateRangeValid = dateFrom <= dateTo;
+
   const generate = useMutation({
     mutationFn: () =>
-      api.post<typeof report>('/reports/generate', {
+      api.post<FeedingReport>('/reports/generate', {
         farmId: selectedFarmId,
         pondId: pondId || undefined,
         feedProductId: feedProductId || undefined,
@@ -69,16 +87,31 @@ export function ReportsPage() {
         dateTo,
         reportType: 'FEEDING_DATE_RANGE',
       }),
-    onSuccess: (data) => setReport(data),
+    onSuccess: (data) => {
+      setReport(data);
+      setShowAllRows(false);
+    },
   });
 
-  const download = (format: 'pdf' | 'excel') => {
+  const download = async (format: 'pdf' | 'excel') => {
     if (!report) return;
-    const token = localStorage.getItem('accessToken');
-    window.open(
-      `${API_URL}/reports/${report.id}/download?format=${format}&token=${token}`,
-      '_blank',
-    );
+    try {
+      setDownloadBusy(format);
+      const ext = format === 'pdf' ? 'pdf' : 'xlsx';
+      const file = await api.file(`/reports/${report.id}/download?format=${format}`);
+      const url = URL.createObjectURL(file.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.filename || `feeding-report-${report.id}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Download failed');
+    } finally {
+      setDownloadBusy(null);
+    }
   };
 
   const share = async () => {
@@ -153,13 +186,29 @@ export function ReportsPage() {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="label">{t('reports.from')}</label>
-              <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="input-field text-base" />
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="input-compact !py-2 !text-base w-full"
+              />
             </div>
             <div>
               <label className="label">{t('reports.to')}</label>
-              <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="input-field text-base" />
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="input-compact !py-2 !text-base w-full"
+              />
             </div>
           </div>
+
+          {!isDateRangeValid && (
+            <div className="card border-danger text-danger text-sm">
+              {t('reports.invalidDateRange', 'From date must be before or equal to To date.')}
+            </div>
+          )}
 
           <button
             type="button"
@@ -216,7 +265,17 @@ export function ReportsPage() {
             </div>
           )}
 
-          <button onClick={() => generate.mutate()} disabled={generate.isPending} className="btn-primary">
+          {generate.isError && (
+            <div className="card border-danger text-danger text-sm">
+              {(generate.error as Error)?.message || 'Failed to generate report'}
+            </div>
+          )}
+
+          <button
+            onClick={() => generate.mutate()}
+            disabled={generate.isPending || !selectedFarmId || !isDateRangeValid}
+            className="btn-primary"
+          >
             {generate.isPending ? t('common.loading') : t('reports.generate')}
           </button>
         </div>
@@ -235,37 +294,77 @@ export function ReportsPage() {
               )}
             </div>
 
-            <div className="overflow-x-auto card p-0">
-              <table className="w-full text-sm">
-                <thead className="bg-primary-light">
-                  <tr>
-                    <th className="p-2 text-left">Date</th>
-                    <th className="p-2">DOC</th>
-                    <th className="p-2">Code</th>
-                    <th className="p-2">TDF</th>
-                    <th className="p-2">Tank</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.rows.slice(0, 20).map((row, i) => (
-                    <tr key={i} className="border-t border-border">
-                      <td className="p-2">{String(row.date)}</td>
-                      <td className="p-2 text-center">{String(row.doc)}</td>
-                      <td className="p-2 text-center">{String(row.feedCode)}</td>
-                      <td className="p-2 text-center font-medium">{String(row.tdf)}</td>
-                      <td className="p-2">{String(row.pondName)}</td>
+            {report.rows.length === 0 ? (
+              <div className="card text-sm text-text-secondary">
+                {t('reports.noData', 'No entries found for the selected period/filters.')}
+              </div>
+            ) : (
+              <div className="overflow-x-auto card p-0">
+                <table className="w-full text-sm">
+                  <thead className="bg-primary-light">
+                    <tr>
+                      <th className="p-2 text-left">Date</th>
+                      <th className="p-2">DOC</th>
+                      <th className="p-2">Code</th>
+                      <th className="p-2">M1</th>
+                      <th className="p-2">M2</th>
+                      <th className="p-2">M3</th>
+                      <th className="p-2">M4</th>
+                      <th className="p-2">M5</th>
+                      <th className="p-2">TDF</th>
+                      <th className="p-2">Cum.</th>
+                      <th className="p-2">Tray</th>
+                      <th className="p-2 text-left">Remarks</th>
+                      <th className="p-2">Tank</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {(showAllRows ? report.rows : report.rows.slice(0, 50)).map((row, i) => (
+                      <tr key={i} className="border-t border-border">
+                        <td className="p-2">{row.date}</td>
+                        <td className="p-2 text-center">{row.doc}</td>
+                        <td className="p-2 text-center">{row.feedCode}</td>
+                        <td className="p-2 text-center">{row.meal1}</td>
+                        <td className="p-2 text-center">{row.meal2}</td>
+                        <td className="p-2 text-center">{row.meal3}</td>
+                        <td className="p-2 text-center">{row.meal4}</td>
+                        <td className="p-2 text-center">{row.meal5}</td>
+                        <td className="p-2 text-center font-medium">{row.tdf}</td>
+                        <td className="p-2 text-center">{row.cumulative}</td>
+                        <td className="p-2 text-center">{row.checkTray}</td>
+                        <td className="p-2">{row.remarks}</td>
+                        <td className="p-2">{row.pondName}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {report.rows.length > 50 && (
+              <button
+                type="button"
+                className="btn-secondary !text-sm"
+                onClick={() => setShowAllRows((s) => !s)}
+              >
+                {showAllRows ? t('common.showLess', 'Show less') : t('common.showAll', 'Show all')} ({report.rows.length})
+              </button>
+            )}
 
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => download('pdf')} className="btn-secondary flex items-center justify-center gap-2 !text-sm">
-                <Download size={18} /> {t('reports.downloadPdf')}
+              <button
+                onClick={() => download('pdf')}
+                disabled={downloadBusy === 'pdf'}
+                className="btn-secondary flex items-center justify-center gap-2 !text-sm"
+              >
+                <Download size={18} /> {downloadBusy === 'pdf' ? t('common.loading') : t('reports.downloadPdf')}
               </button>
-              <button onClick={() => download('excel')} className="btn-secondary flex items-center justify-center gap-2 !text-sm">
-                <Download size={18} /> {t('reports.downloadExcel')}
+              <button
+                onClick={() => download('excel')}
+                disabled={downloadBusy === 'excel'}
+                className="btn-secondary flex items-center justify-center gap-2 !text-sm"
+              >
+                <Download size={18} /> {downloadBusy === 'excel' ? t('common.loading') : t('reports.downloadExcel')}
               </button>
               <button onClick={share} className="btn-secondary flex items-center justify-center gap-2 !text-sm">
                 <Share2 size={18} /> {t('reports.share')}

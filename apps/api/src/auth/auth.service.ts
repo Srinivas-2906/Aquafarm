@@ -1,12 +1,13 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { OtpService } from './otp.service';
 import { DEFAULTS } from '@aqualedger/config';
-import { loginSchema, activateSchema, resetPinSchema } from '@aqualedger/validation';
+import { loginSchema, activateSchema, inviteSupervisorSchema, resetPinSchema, setPinSchema } from '@aqualedger/validation';
 import type { AuthUser, FarmAccess } from '@aqualedger/contracts';
+import { isSelectableFarm } from '../common/constants/farm.constants';
 
 @Injectable()
 export class AuthService {
@@ -16,6 +17,126 @@ export class AuthService {
     private config: ConfigService,
     private otp: OtpService,
   ) {}
+
+  async inviteSupervisor(
+    data: { farmId: string; phoneNumber: string; pin: string },
+    owner: { userId: string; organizationId: string },
+  ) {
+    const parsed = inviteSupervisorSchema.safeParse(data);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.errors[0]?.message || 'Invalid invite');
+    }
+
+    const farmAccess = await this.prisma.farmUser.findFirst({
+      where: {
+        farmId: parsed.data.farmId,
+        userId: owner.userId,
+        role: 'OWNER',
+        status: 'ACTIVE',
+      },
+    });
+    if (!farmAccess) {
+      throw new ForbiddenException('Not allowed to invite for this farm');
+    }
+
+    const farm = await this.prisma.farm.findFirst({
+      where: { id: parsed.data.farmId, organizationId: owner.organizationId, status: 'ACTIVE' },
+    });
+    if (!farm) throw new BadRequestException('Farm not found');
+
+    const pinHash = await bcrypt.hash(parsed.data.pin, 12);
+    const existing = await this.prisma.user.findFirst({
+      where: { organizationId: owner.organizationId, phoneNumber: parsed.data.phoneNumber },
+      include: {
+        farmUsers: {
+          where: { status: 'ACTIVE' },
+          include: { farm: true },
+        },
+      },
+    });
+
+    if (existing?.role === 'OWNER') {
+      throw new BadRequestException('Cannot invite an owner account with this phone number');
+    }
+
+    const user =
+      existing
+        ? await this.prisma.user.update({
+            where: { id: existing.id },
+            data: {
+              pinHash,
+              mustChangePin: true,
+              status: 'ACTIVE',
+              activationCode: null,
+              loginAttempts: 0,
+              lockedUntil: null,
+            },
+            include: {
+              farmUsers: {
+                where: { status: 'ACTIVE' },
+                include: { farm: true },
+              },
+            },
+          })
+        : await this.prisma.user.create({
+            data: {
+              organizationId: owner.organizationId,
+              phoneNumber: parsed.data.phoneNumber,
+              displayName: 'Supervisor',
+              role: 'SUPERVISOR',
+              pinHash,
+              mustChangePin: true,
+              status: 'ACTIVE',
+            },
+            include: {
+              farmUsers: {
+                where: { status: 'ACTIVE' },
+                include: { farm: true },
+              },
+            },
+          });
+
+    await this.prisma.farmUser.upsert({
+      where: { farmId_userId: { farmId: parsed.data.farmId, userId: user.id } },
+      update: { role: 'SUPERVISOR', status: 'ACTIVE' },
+      create: { farmId: parsed.data.farmId, userId: user.id, role: 'SUPERVISOR', status: 'ACTIVE' },
+    });
+
+    // Re-fetch with farmUsers to ensure consistent response
+    const finalUser = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      include: {
+        farmUsers: {
+          where: { status: 'ACTIVE' },
+          include: { farm: true },
+        },
+      },
+    });
+    if (!finalUser) throw new BadRequestException('User not found');
+
+    return {
+      message: 'Supervisor invited successfully',
+      user: this.mapUser(finalUser),
+    };
+  }
+
+  async setPin(userId: string, newPin: string) {
+    const parsed = setPinSchema.safeParse({ newPin });
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.errors[0]?.message || 'Invalid PIN');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException();
+
+    const pinHash = await bcrypt.hash(parsed.data.newPin, 12);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { pinHash, mustChangePin: false, loginAttempts: 0, lockedUntil: null },
+    });
+
+    return { message: 'PIN updated successfully' };
+  }
 
   async login(phoneNumber: string, pin: string, userAgent?: string, ipAddress?: string) {
     const parsed = loginSchema.safeParse({ phoneNumber, pin });
@@ -217,14 +338,17 @@ export class AuthService {
     role: 'OWNER' | 'SUPERVISOR';
     preferredLanguage: 'en' | 'te';
     status: 'ACTIVE' | 'INACTIVE' | 'PENDING_ACTIVATION';
-    farmUsers: Array<{ farmId: string; role: 'OWNER' | 'SUPERVISOR'; farm: { name: string; timezone: string } }>;
+    mustChangePin: boolean;
+    farmUsers: Array<{ farmId: string; role: 'OWNER' | 'SUPERVISOR'; farm: { id: string; name: string; timezone: string; status: string } }>;
   }): AuthUser {
-    const farms: FarmAccess[] = user.farmUsers.map((fu) => ({
-      farmId: fu.farmId,
-      farmName: fu.farm.name,
-      role: fu.role as FarmAccess['role'],
-      timezone: fu.farm.timezone,
-    }));
+    const farms: FarmAccess[] = user.farmUsers
+      .filter((fu) => isSelectableFarm(fu.farm))
+      .map((fu) => ({
+        farmId: fu.farmId,
+        farmName: fu.farm.name,
+        role: fu.role as FarmAccess['role'],
+        timezone: fu.farm.timezone,
+      }));
     return {
       id: user.id,
       organizationId: user.organizationId,
@@ -233,6 +357,7 @@ export class AuthService {
       role: user.role as AuthUser['role'],
       preferredLanguage: user.preferredLanguage as AuthUser['preferredLanguage'],
       status: user.status as AuthUser['status'],
+      mustChangePin: user.mustChangePin,
       farms,
     };
   }

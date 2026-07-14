@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { InventoryService } from './inventory.service';
 import { JwtAuthGuard } from '../common/guards/auth.guards';
@@ -14,6 +14,20 @@ export class InventoryController {
   @Get('summary')
   async summary(@Query('farmId') farmId: string) {
     return this.inventory.getSummary(farmId);
+  }
+
+  @Get('total')
+  async total(@Query('farmId') farmId: string) {
+    return this.inventory.getFarmTotal(farmId);
+  }
+
+  @Patch('total')
+  async setTotal(
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.inventory.setFarmTotal(body, userId, organizationId);
   }
 
   @Get('transactions')

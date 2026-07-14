@@ -9,15 +9,19 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(
+function parseFilenameFromContentDisposition(headerValue: string | null): string | undefined {
+  if (!headerValue) return undefined;
+  const match = /filename="([^"]+)"/i.exec(headerValue);
+  return match?.[1];
+}
+
+async function requestResponse(
   path: string,
   options: RequestInit = {},
-): Promise<T> {
+): Promise<Response> {
   const token = localStorage.getItem('accessToken');
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string>),
-  };
+  const headers: Record<string, string> = { ...(options.headers as Record<string, string>) };
+  if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
 
   let response: Response;
@@ -36,15 +40,43 @@ async function request<T>(
     throw new ApiError(response.status, body.message || 'Request failed');
   }
 
+  return response;
+}
+
+async function requestJson<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const response = await requestResponse(path, options);
   return response.json();
 }
 
+export type ApiFile = {
+  blob: Blob;
+  filename?: string;
+  contentType?: string;
+};
+
+async function requestFile(
+  path: string,
+  options: RequestInit = {},
+): Promise<ApiFile> {
+  const response = await requestResponse(path, options);
+  const blob = await response.blob();
+  return {
+    blob,
+    filename: parseFilenameFromContentDisposition(response.headers.get('Content-Disposition')),
+    contentType: response.headers.get('Content-Type') || undefined,
+  };
+}
+
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string) => requestJson<T>(path),
   post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'POST', body: JSON.stringify(body) }),
+    requestJson<T>(path, { method: 'POST', body: JSON.stringify(body) }),
   patch: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
+    requestJson<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  file: (path: string) => requestFile(path),
 };
 
 export const authApi = {

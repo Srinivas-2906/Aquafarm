@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { AuditService } from '../audit/audit.service';
@@ -8,17 +8,30 @@ import { feedProductSchema, feedProductUpdateSchema } from '@aqualedger/validati
 export class FeedProductsService {
   constructor(
     private prisma: PrismaService,
+    @Inject(forwardRef(() => InventoryService))
     private inventory: InventoryService,
     private audit: AuditService,
   ) {}
 
   async findByFarm(farmId: string) {
+    const farm = await this.prisma.farm.findFirst({
+      where: { id: farmId, status: 'ACTIVE' },
+    });
+    if (farm) {
+      await this.ensureDefaultFeedProducts(farmId, farm.organizationId);
+    }
+
     const products = await this.prisma.feedProduct.findMany({
       where: { farmId, status: 'ACTIVE' },
-      orderBy: { feedCode: 'asc' },
     });
 
-    return Promise.all(products.map((product) => this.mapProduct(product)));
+    const ordered = [...products].sort(
+      (a, b) =>
+        this.defaultFeedProducts.findIndex((p) => p.feedCode === a.feedCode) -
+        this.defaultFeedProducts.findIndex((p) => p.feedCode === b.feedCode),
+    );
+
+    return Promise.all(ordered.map((product) => this.mapProduct(product)));
   }
 
   async findOne(id: string) {
@@ -146,6 +159,51 @@ export class FeedProductsService {
     });
 
     return this.mapProduct(product);
+  }
+
+  private readonly defaultFeedProducts = [
+    { feedCode: '1C', brandName: 'Feed 1C', pelletSize: '1.2mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
+    { feedCode: '2C', brandName: 'Feed 2C', pelletSize: '1.5mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
+    { feedCode: '20', brandName: 'Feed 20', pelletSize: '2.0mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
+    { feedCode: '3S', brandName: 'Feed 3S', pelletSize: '2.0mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
+    { feedCode: '3SP', brandName: 'Feed 3SP', pelletSize: '2.0mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
+    { feedCode: '3P', brandName: 'Feed 3P', pelletSize: '2.0mm', bagWeightKg: '25', lowStockThresholdKg: '200' },
+  ] as const;
+
+  private async ensureDefaultFeedProducts(farmId: string, organizationId: string) {
+    for (const product of this.defaultFeedProducts) {
+      const existing = await this.prisma.feedProduct.findUnique({
+        where: { farmId_feedCode: { farmId, feedCode: product.feedCode } },
+      });
+      if (existing?.status === 'ACTIVE') continue;
+
+      if (existing) {
+        await this.prisma.feedProduct.update({
+          where: { id: existing.id },
+          data: {
+            brandName: product.brandName,
+            pelletSize: product.pelletSize,
+            bagWeightKg: product.bagWeightKg,
+            lowStockThresholdKg: product.lowStockThresholdKg,
+            status: 'ACTIVE',
+          },
+        });
+        continue;
+      }
+
+      await this.prisma.feedProduct.create({
+        data: {
+          organizationId,
+          farmId,
+          brandName: product.brandName,
+          feedCode: product.feedCode,
+          pelletSize: product.pelletSize,
+          bagWeightKg: product.bagWeightKg,
+          lowStockThresholdKg: product.lowStockThresholdKg,
+          status: 'ACTIVE',
+        },
+      });
+    }
   }
 
   private async mapProduct(product: {

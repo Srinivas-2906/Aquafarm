@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FeedingService } from '../feeding/feeding.service';
-import { sumDecimals } from '../common/utils/date.utils';
+import { parseDateOnly, sumDecimals } from '../common/utils/date.utils';
 import * as path from 'path';
 import * as fs from 'fs';
 import PDFDocument from 'pdfkit';
@@ -27,8 +27,8 @@ export class ReportsService {
       farmId: filters.farmId,
       status: { in: ['CONFIRMED', 'PENDING_OWNER_APPROVAL'] },
       feedingDate: {
-        gte: new Date(filters.dateFrom),
-        lte: new Date(filters.dateTo),
+        gte: parseDateOnly(filters.dateFrom),
+        lte: parseDateOnly(filters.dateTo),
       },
     };
     if (filters.pondId) where.pondId = filters.pondId;
@@ -56,6 +56,7 @@ export class ReportsService {
         const cumulative = await this.feeding.getCumulativeFeed(
           e.cultureCycleId,
           e.feedingDate,
+          ['CONFIRMED', 'PENDING_OWNER_APPROVAL'],
         );
         const mealMap: Record<number, string> = {};
         e.meals.forEach((m) => {
@@ -123,11 +124,14 @@ export class ReportsService {
     };
   }
 
-  async getReport(reportId: string) {
+  async getReport(reportId: string, organizationId?: string) {
     const report = await this.prisma.generatedReport.findUnique({
       where: { id: reportId },
     });
     if (!report) throw new NotFoundException('Report not found');
+    if (organizationId && report.organizationId !== organizationId) {
+      throw new ForbiddenException();
+    }
     return report;
   }
 

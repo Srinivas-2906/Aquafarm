@@ -1,83 +1,87 @@
-import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams, useParams, Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuidv4 } from 'uuid';
-import { Plus, ArrowLeft, ScanLine, FileText, X, Pencil } from 'lucide-react';
+import { Plus, Pencil, ChevronDown, Minus } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
-import { NumericQuantityInput } from '@/components/NumericQuantityInput';
+import { AddTankButton } from '@/components/AddTankButton';
 import { RecordLockNotice } from '@/components/RecordLockNotice';
-import { ScanSheetModal } from '@/components/ScanSheetModal';
 import { useAuth } from '@/contexts/AuthContext';
 import { UserRole } from '@/types/roles';
 import { api, ApiError } from '@/lib/api';
 import { saveFeedingLocally } from '@/lib/sync';
 import {
   getTodayISO,
-  getYesterdayISO,
-  sumKg,
-  toKg,
-  formatShortDate,
   formatQty,
   getDefaultMealTime,
-  calculateDoc,
-  addDaysISO,
+  from24HourTime,
+  to24HourTime,
+  formatFeedQtyKg,
+  convertQuantityUnit,
+  quantityToKg,
   isSupervisorEditableDate,
   type QuantityUnit,
 } from '@/lib/utils';
-import type { PondDto, FeedProductDto, FeedingEntryDto, FeedingMealDto } from '@aqualedger/contracts';
-import type { TFunction } from 'i18next';
+import type { PondDto, FeedProductDto, FeedingEntryDto } from '@aqualedger/contracts';
 
-function FeedingDateSelector({
-  feedingDate,
-  todayISO,
-  yesterdayISO,
-  onDateChange,
-  t,
-}: {
-  feedingDate: string;
-  todayISO: string;
-  yesterdayISO: string;
-  onDateChange: (value: string) => void;
-  t: TFunction;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 flex-wrap">
-        <button
-          type="button"
-          onClick={() => onDateChange(todayISO)}
-          className={`px-3 py-1 rounded-full text-sm font-medium ${
-            feedingDate === todayISO ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
-          }`}
-        >
-          {t('common.today')}
-        </button>
-        <button
-          type="button"
-          onClick={() => onDateChange(yesterdayISO)}
-          className={`px-3 py-1 rounded-full text-sm font-medium ${
-            feedingDate === yesterdayISO ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
-          }`}
-        >
-          {t('common.yesterday')}
-        </button>
-      </div>
-      <div className="flex items-center gap-2 min-w-0">
-        <span className="text-xs text-text-secondary shrink-0">{t('feeding.selectDate')}</span>
-        <input
-          type="date"
-          value={feedingDate}
-          max={todayISO}
-          onChange={(e) => onDateChange(e.target.value)}
-          className="input-compact !py-1.5 !text-sm flex-1 min-w-0"
-        />
-      </div>
-    </div>
+const FEED_CODE_ORDER = ['1C', '2C', '20', '3S', '3SP', '3P'];
+
+function sortFeedProducts(products: FeedProductDto[]): FeedProductDto[] {
+  return [...products].sort(
+    (a, b) => FEED_CODE_ORDER.indexOf(a.feedCode) - FEED_CODE_ORDER.indexOf(b.feedCode),
   );
 }
 
-const API_URL = import.meta.env.VITE_API_URL || '/api';
+type FeedRow = {
+  key: string;
+  mealId?: string;
+  mealNumber: number;
+  quantity: string;
+  quantityUnit: QuantityUnit;
+  hour: string;
+  ampm: 'AM' | 'PM';
+};
+
+function defaultRow(mealNumber = 1): FeedRow {
+  const { hour, ampm } = from24HourTime(getDefaultMealTime());
+  return { key: uuidv4(), mealNumber, quantity: '', quantityUnit: 'kg', hour, ampm };
+}
+
+function rowsFromEntry(entry: FeedingEntryDto): FeedRow[] {
+  if (!entry.meals.length) return [defaultRow()];
+  return entry.meals
+    .sort((a, b) => a.mealNumber - b.mealNumber)
+    .map((meal) => {
+      const { hour, ampm } = from24HourTime(meal.actualTime || getDefaultMealTime());
+      return {
+        key: meal.id,
+        mealId: meal.id,
+        mealNumber: meal.mealNumber,
+        quantity: meal.feedQuantityKg,
+        quantityUnit: 'kg' as const,
+        hour,
+        ampm,
+      };
+    });
+}
+
+function readError(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
+async function fetchEntryForDate(
+  farmId: string,
+  pondId: string,
+  feedingDate: string,
+): Promise<FeedingEntryDto | null> {
+  const result = await api.get<{ data: FeedingEntryDto[] }>(
+    `/feeding-entries?farmId=${farmId}&pondId=${pondId}&dateFrom=${feedingDate}&dateTo=${feedingDate}`,
+  );
+  return result.data[0] || null;
+}
 
 export function FeedingEntryPage() {
   const { t } = useTranslation();
@@ -87,71 +91,44 @@ export function FeedingEntryPage() {
   const { selectedFarmId, user } = useAuth();
   const queryClient = useQueryClient();
 
+  const pondIdParam = searchParams.get('pondId') || '';
+  const [selectedPondId, setSelectedPondId] = useState(pondIdParam);
+  const [feedingDate, setFeedingDate] = useState(getTodayISO());
+  const [feedProductId, setFeedProductId] = useState('');
+  const [rows, setRows] = useState<FeedRow[]>([defaultRow()]);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveOk, setSaveOk] = useState(false);
+  const [mode, setMode] = useState<'view' | 'add' | 'edit'>('view');
+
+  const todayISO = getTodayISO();
+  const isOwner = user?.role === UserRole.OWNER;
+
   const { data: entryById } = useQuery({
     queryKey: ['feeding-entry', entryId],
     queryFn: () => api.get<FeedingEntryDto>(`/feeding-entries/${entryId}`),
     enabled: !!entryId,
   });
 
-  const pondIdParam = searchParams.get('pondId');
-  const [selectedPondId, setSelectedPondId] = useState(pondIdParam || '');
-  const [showAddForm, setShowAddForm] = useState(searchParams.get('add') === 'true');
-
   useEffect(() => {
-    if (entryId) return;
-
     if (pondIdParam) {
       setSelectedPondId(pondIdParam);
-      setShowAddForm(searchParams.get('add') === 'true');
-    } else {
-      setSelectedPondId('');
-      setShowAddForm(false);
+      return;
     }
-  }, [pondIdParam, searchParams, entryId]);
+    if (!entryId) {
+      setSelectedPondId('');
+    }
+  }, [pondIdParam, entryId]);
 
   useEffect(() => {
-    if (entryById && !selectedPondId) setSelectedPondId(entryById.pondId);
-  }, [entryById, selectedPondId]);
-
-  useEffect(() => {
-    if (!showAddForm) return;
-    setJustOpenedForm(true);
-    const t = window.setTimeout(() => setJustOpenedForm(false), 220);
-    return () => window.clearTimeout(t);
-  }, [showAddForm]);
-  const [quantity, setQuantity] = useState('');
-  const [quantityUnit, setQuantityUnit] = useState<QuantityUnit>('kg');
-  const [feedingDate, setFeedingDate] = useState(getTodayISO());
-  const [mealTime, setMealTime] = useState(getDefaultMealTime);
-  const [feedProductId, setFeedProductId] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [confirmLarge, setConfirmLarge] = useState(false);
-  const [usualQty, setUsualQty] = useState<string | null>(null);
-  const [saved, setSaved] = useState<{
-    pondName: string;
-    mealNumber: number;
-    quantity: string;
-    tdf: string;
-    status: string;
-  } | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [justOpenedForm, setJustOpenedForm] = useState(false);
-  const [scanOpen, setScanOpen] = useState(false);
-  const [dailyReportOpen, setDailyReportOpen] = useState(false);
-  const [dailyReportLoading, setDailyReportLoading] = useState(false);
-  const [dailyReportError, setDailyReportError] = useState<string | null>(null);
-  const [dailyReport, setDailyReport] = useState<{
-    id: string;
-    rows: Array<Record<string, unknown>>;
-    summary: { totalEntries: number; periodTotalKg: string };
-    downloadUrls: { pdf: string; excel: string };
-  } | null>(null);
-  const [editingMeal, setEditingMeal] = useState<FeedingMealDto | null>(null);
-  const [editQuantity, setEditQuantity] = useState('');
-  const [editQuantityUnit, setEditQuantityUnit] = useState<QuantityUnit>('kg');
-  const [editMealTime, setEditMealTime] = useState(getDefaultMealTime);
-  const [editSaving, setEditSaving] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
+    if (entryById) {
+      setSelectedPondId(entryById.pondId);
+      setFeedingDate(entryById.feedingDate.split('T')[0]);
+      setFeedProductId(entryById.feedProductId);
+      setRows(rowsFromEntry(entryById));
+      setMode('view');
+    }
+  }, [entryById]);
 
   const { data: ponds } = useQuery({
     queryKey: ['ponds', selectedFarmId],
@@ -165,738 +142,281 @@ export function FeedingEntryPage() {
     enabled: !!selectedFarmId,
   });
 
-  useEffect(() => {
-    if (entryById) setFeedingDate(entryById.feedingDate.split('T')[0]);
-  }, [entryById]);
-
-  const isOwner = user?.role === UserRole.OWNER;
-  const todayISO = getTodayISO();
-  const yesterdayISO = getYesterdayISO();
-
-  const { data: existingEntryForDate, refetch: refetchEntryForDate } = useQuery({
+  const { data: existingEntry, refetch: refetchEntry } = useQuery({
     queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate],
-    queryFn: async () => {
-      const result = await api.get<{ data: FeedingEntryDto[] }>(
-        `/feeding-entries?farmId=${selectedFarmId}&pondId=${selectedPondId}&dateFrom=${feedingDate}&dateTo=${feedingDate}`,
-      );
-      return result.data[0] || null;
-    },
+    queryFn: () => fetchEntryForDate(selectedFarmId!, selectedPondId, feedingDate),
     enabled: !!selectedPondId && !!selectedFarmId && !entryId,
   });
 
-  const existingEntry = entryId ? entryById : existingEntryForDate;
-  const canEditCurrentDate = isOwner || isSupervisorEditableDate(feedingDate);
-  const canEditEntry = existingEntry ? existingEntry.isEditable : canEditCurrentDate;
-
-  const priorDateISO = addDaysISO(feedingDate, -1);
-
-  useEffect(() => {
-    if (selectedPondId && !showAddForm && !saved) {
-      void refetchEntryForDate();
-    }
-  }, [selectedPondId, showAddForm, saved, feedingDate, refetchEntryForDate]);
-
-  const { data: priorEntry } = useQuery({
-    queryKey: ['feeding-prior', selectedPondId, priorDateISO],
-    queryFn: async () => {
-      const result = await api.get<{ data: FeedingEntryDto[] }>(
-        `/feeding-entries?farmId=${selectedFarmId}&pondId=${selectedPondId}&dateFrom=${priorDateISO}&dateTo=${priorDateISO}`,
-      );
-      return result.data[0] || null;
-    },
-    enabled: !!selectedPondId && !!selectedFarmId && !existingEntry,
-  });
-
-  const suggestedQty =
-    existingEntry?.meals[existingEntry.meals.length - 1]?.feedQuantityKg ||
-    priorEntry?.meals[priorEntry.meals.length - 1]?.feedQuantityKg ||
-    null;
+  const sortedFeedProducts = useMemo(
+    () => (feedProducts ? sortFeedProducts(feedProducts) : undefined),
+    [feedProducts],
+  );
 
   useEffect(() => {
-    if (existingEntry?.feedProductId) {
+    if (entryId) return;
+    if (existingEntry) {
+      setRows(rowsFromEntry(existingEntry));
       setFeedProductId(existingEntry.feedProductId);
-    } else if (feedProducts?.length && !feedProductId) {
-      setFeedProductId(feedProducts[0].id);
+      setMode('view');
+      return;
     }
-  }, [feedProducts, feedProductId, existingEntry]);
+    setRows([defaultRow()]);
+    setMode('add');
+    setSaveOk(false);
+  }, [existingEntry, entryId, selectedPondId, feedingDate]);
 
-  const nextMealNumber = (existingEntry?.meals.length ?? 0) + 1;
-  const currentTdf = existingEntry
-    ? sumKg([...existingEntry.meals.map((m) => m.feedQuantityKg), quantity].filter(Boolean))
-    : quantity || '0';
+  useEffect(() => {
+    if (!sortedFeedProducts?.length) return;
+    setFeedProductId((current) => {
+      if (current && sortedFeedProducts.some((fp) => fp.id === current)) return current;
+      if (existingEntry?.feedProductId && sortedFeedProducts.some((fp) => fp.id === existingEntry.feedProductId)) {
+        return existingEntry.feedProductId;
+      }
+      return sortedFeedProducts.find((fp) => fp.feedCode === '1C')?.id || sortedFeedProducts[0].id;
+    });
+  }, [sortedFeedProducts, existingEntry?.feedProductId]);
 
   const selectedPond = ponds?.find((p) => p.id === selectedPondId);
-  const selectedProduct = feedProducts?.find((p) => p.id === feedProductId);
-  const stockingDate = selectedPond?.activeCycle?.stockingDate;
-  const displayDoc =
-    existingEntry?.doc ??
-    (stockingDate ? calculateDoc(stockingDate, feedingDate) : selectedPond?.activeCycle?.doc);
-  const displayFeedCode = existingEntry?.feedCode ?? selectedProduct?.feedCode;
-  const dateLocked = !!existingEntry;
-  const [mealHour, mealMinute] = mealTime.split(':');
+  const activeEntry = entryById || existingEntry;
+  const resolvedFeedProductId =
+    feedProductId || sortedFeedProducts?.find((fp) => fp.feedCode === '1C')?.id || sortedFeedProducts?.[0]?.id || '';
+  const canEditDate = isSupervisorEditableDate(feedingDate);
+  const canEdit = isOwner || (activeEntry?.isEditable ?? canEditDate);
+  const hasSavedEntry = !!activeEntry && activeEntry.meals.length > 0;
+  const isFormActive = !hasSavedEntry || mode !== 'view';
+  const feedCodeLabel =
+    sortedFeedProducts?.find((fp) => fp.id === resolvedFeedProductId)?.feedCode ||
+    activeEntry?.feedCode ||
+    '—';
 
-  const handleMealHourChange = (hour: string) => {
-    setMealTime(`${hour}:${mealMinute || '00'}`);
-  };
-
-  const handleMealMinuteChange = (minute: string) => {
-    setMealTime(`${mealHour || '00'}:${minute}`);
-  };
+  const dayTotal = useMemo(() => {
+    const rowTotal = rows.reduce((sum, row) => sum + quantityToKg(row.quantity, row.quantityUnit), 0);
+    if (rowTotal > 0) return rowTotal.toFixed(1);
+    return activeEntry?.totalDailyFeedKg || '0';
+  }, [rows, activeEntry]);
 
   const goToTankList = () => {
-    setSelectedPondId('');
-    setShowAddForm(false);
-    setSaved(null);
-    setSaveError(null);
     navigate('/feeding/entry');
-  };
-
-  const goToTankOverview = () => {
-    setShowAddForm(false);
+    setSelectedPondId('');
+    setMode('view');
     setSaveError(null);
+    setSaveOk(false);
   };
 
-  const openDailyTankReport = async () => {
-    if (!selectedFarmId || !selectedPondId) return;
-    setDailyReportOpen(true);
-    setDailyReportError(null);
-    setDailyReportLoading(true);
-    try {
-      if (!isOwner) {
-        if (!existingEntry) {
-          setDailyReportError(t('reports.noData'));
-          setDailyReport(null);
-          return;
-        }
-        const mealMap: Record<number, string> = {};
-        existingEntry.meals.forEach((m) => {
-          mealMap[m.mealNumber] = m.feedQuantityKg?.toString?.() ?? String(m.feedQuantityKg ?? '');
-        });
-        setDailyReport({
-          id: 'local',
-          rows: [
-            {
-              date: existingEntry.feedingDate.split('T')[0],
-              doc: existingEntry.doc,
-              feedCode: existingEntry.feedCode || displayFeedCode || '—',
-              meal1: mealMap[1] || '',
-              meal2: mealMap[2] || '',
-              meal3: mealMap[3] || '',
-              meal4: mealMap[4] || '',
-              meal5: mealMap[5] || '',
-              tdf: existingEntry.totalDailyFeedKg,
-              cumulative: existingEntry.cumulativeFeedKg,
-              checkTray: existingEntry.meals
-                .map((m) => m.checkTrayRemainingPercentage)
-                .filter(Boolean)
-                .join(', '),
-              remarks: existingEntry.remarks || '',
-              pondName: selectedPond?.name || existingEntry.pondName || '',
-            },
-          ],
-          summary: { totalEntries: 1, periodTotalKg: existingEntry.totalDailyFeedKg },
-          downloadUrls: { pdf: '', excel: '' },
-        });
-      } else {
-        const res = await api.post<typeof dailyReport>('/reports/generate', {
-          farmId: selectedFarmId,
-          pondId: selectedPondId,
-          dateFrom: feedingDate,
-          dateTo: feedingDate,
-          reportType: 'FEEDING_DATE_RANGE',
-        });
-        setDailyReport(res);
-      }
-    } catch (e) {
-      setDailyReportError(e instanceof Error ? e.message : t('common.error'));
-      setDailyReport(null);
-    } finally {
-      setDailyReportLoading(false);
-    }
-  };
-
-  const downloadDailyReport = (format: 'pdf' | 'excel') => {
-    if (!dailyReport) return;
-    if (!isOwner || dailyReport.id === 'local') return;
-    const token = localStorage.getItem('accessToken');
-    window.open(
-      `${API_URL}/reports/${dailyReport.id}/download?format=${format}&token=${token}`,
-      '_blank',
-    );
-  };
-
-  const shareDailyReport = async () => {
-    if (!dailyReport) return;
-    const text = `Feeding Report\nTank: ${selectedPond?.name || ''}\nDate: ${feedingDate}\nTotal: ${dailyReport.summary.periodTotalKg} kg\nEntries: ${dailyReport.summary.totalEntries}`;
-    if (navigator.share) {
-      await navigator.share({ title: 'Daily Tank Report', text });
-    } else {
-      await navigator.clipboard.writeText(text);
-      alert('Summary copied to clipboard');
-    }
+  const handleTankPick = (pondId: string) => {
+    navigate(`/feeding/entry?pondId=${pondId}`);
   };
 
   const handleDateChange = (value: string) => {
     if (!value || value > todayISO) return;
     setFeedingDate(value);
+    setSaveError(null);
+    setSaveOk(false);
   };
 
-  const openMealEditor = (meal: FeedingMealDto) => {
-    setEditingMeal(meal);
-    setEditQuantity(meal.feedQuantityKg);
-    setEditQuantityUnit('kg');
-    setEditMealTime(meal.actualTime || getDefaultMealTime());
-    setEditError(null);
+  const startEditing = () => {
+    setMode('edit');
+    setSaveError(null);
+    setSaveOk(false);
   };
 
-  const closeMealEditor = () => {
-    setEditingMeal(null);
-    setEditQuantity('');
-    setEditError(null);
-  };
-
-  const handleSaveMealEdit = async () => {
-    if (!existingEntry || !editingMeal) return;
-    const qtyKg = toKg(editQuantity, editQuantityUnit);
-    if (!qtyKg || parseFloat(qtyKg) <= 0) return;
-
-    setEditSaving(true);
-    setEditError(null);
-    try {
-      const result = await api.patch<FeedingEntryDto>(
-        `/feeding-entries/${existingEntry.id}/meals/${editingMeal.id}`,
-        {
-          feedQuantityKg: qtyKg,
-          actualTime: editMealTime,
-        },
-      );
-      queryClient.setQueryData(['feeding-entry-by-date', selectedPondId, feedingDate], result);
-      await queryClient.invalidateQueries({ queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate] });
-      await queryClient.invalidateQueries({ queryKey: ['feeding-entry', entryId] });
-      await queryClient.invalidateQueries({ queryKey: ['pond-status', selectedFarmId] });
-      await queryClient.invalidateQueries({ queryKey: ['inventory-summary', selectedFarmId] });
-      closeMealEditor();
-    } catch (err) {
-      setEditError(err instanceof ApiError ? err.message : t('common.error'));
-    } finally {
-      setEditSaving(false);
+  const cancelEditing = () => {
+    setMode('view');
+    setSaveError(null);
+    setSaveOk(false);
+    if (activeEntry) {
+      setFeedProductId(activeEntry.feedProductId);
+      setRows(rowsFromEntry(activeEntry));
     }
   };
 
-  const [editMealHour, editMealMinute] = editMealTime.split(':');
+  const updateRow = (key: string, patch: Partial<FeedRow>) => {
+    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+    setSaveError(null);
+    setSaveOk(false);
+  };
 
-  const dayTotalLabel =
-    feedingDate === todayISO
-      ? t('feeding.todayTotal')
-      : feedingDate === yesterdayISO
-        ? t('feeding.yesterdayTotal')
-        : t('feeding.dayTotal', { date: formatShortDate(feedingDate) });
+  const addRow = () => {
+    if (hasSavedEntry && mode === 'view') {
+      setMode('add');
+      setSaveError(null);
+      setSaveOk(false);
+    }
+    const nextNumber = Math.max(0, ...rows.map((r) => r.mealNumber)) + 1;
+    setRows((current) => [...current, defaultRow(nextNumber)]);
+  };
 
-  const handleSave = async (skipLargeConfirm = false) => {
-    const qtyKg = toKg(quantity, quantityUnit);
-    if (!qtyKg || parseFloat(qtyKg) <= 0) return;
-    if (!selectedPond?.activeCycle) return;
+  const removeRow = (key: string) => {
+    setRows((current) => {
+      const target = current.find((row) => row.key === key);
+      if (!target || target.mealId) return current;
 
-    const lastMealQty = existingEntry?.meals[existingEntry.meals.length - 1]?.feedQuantityKg;
-    if (
-      lastMealQty &&
-      !skipLargeConfirm &&
-      parseFloat(qtyKg) > parseFloat(lastMealQty) * 3
-    ) {
-      setUsualQty(lastMealQty);
-      setConfirmLarge(true);
+      const unsavedRows = current.filter((row) => !row.mealId);
+      if (!hasSavedEntry && unsavedRows.length <= 1) return current;
+
+      const next = current.filter((row) => row.key !== key);
+      return next.length ? next : [defaultRow()];
+    });
+    setSaveError(null);
+    setSaveOk(false);
+  };
+
+  const ensurePondReady = async (): Promise<PondDto> => {
+    let pond = ponds?.find((p) => p.id === selectedPondId);
+    if (pond?.activeCycle) return pond;
+
+    await api.post(`/ponds/${selectedPondId}/culture-cycle`, {});
+    const fresh = await queryClient.fetchQuery({
+      queryKey: ['ponds', selectedFarmId],
+      queryFn: () => api.get<PondDto[]>(`/farms/${selectedFarmId}/ponds`),
+    });
+    pond = fresh?.find((p) => p.id === selectedPondId);
+    if (!pond?.activeCycle) {
+      throw new ApiError(400, t('feeding.noActiveCycle'));
+    }
+    return pond;
+  };
+
+  const persistMeals = async (entry: FeedingEntryDto, filled: FeedRow[]) => {
+    for (const row of filled) {
+      const qty = formatFeedQtyKg(row.quantity, row.quantityUnit);
+      if (!qty) continue;
+      const payload = {
+        feedQuantityKg: qty,
+        actualTime: to24HourTime(row.hour, '00', row.ampm),
+      };
+      if (row.mealId) {
+        await api.patch(`/feeding-entries/${entry.id}/meals/${row.mealId}`, payload);
+      } else {
+        await api.post(`/feeding-entries/${entry.id}/meals`, {
+          mealNumber: row.mealNumber,
+          ...payload,
+        });
+      }
+    }
+  };
+
+  const handleSaveAll = async () => {
+    if (!selectedFarmId) return;
+
+    const filled = rows
+      .map((row) => ({
+        ...row,
+        quantity: formatFeedQtyKg(row.quantity, row.quantityUnit),
+        quantityUnit: 'kg' as const,
+      }))
+      .filter((row) => row.quantity);
+
+    if (!filled.length) return;
+    if (!resolvedFeedProductId) {
+      setSaveError(t('feeding.selectFeedCode'));
       return;
     }
 
     setSaving(true);
     setSaveError(null);
+    setSaveOk(false);
+
     try {
-      if (existingEntry) {
-        const result = await api.post<FeedingEntryDto>(`/feeding-entries/${existingEntry.id}/meals`, {
-          mealNumber: nextMealNumber,
-          feedQuantityKg: qtyKg,
-          actualTime: mealTime,
-        });
-        queryClient.setQueryData(
-          ['feeding-entry-by-date', selectedPondId, feedingDate],
-          result,
-        );
-        setSaved({
-          pondName: selectedPond.name,
-          mealNumber: nextMealNumber,
-          quantity: qtyKg,
-          tdf: result.totalDailyFeedKg,
-          status: 'SYNCED',
-        });
-        await queryClient.invalidateQueries({ queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate] });
-        await queryClient.invalidateQueries({ queryKey: ['feeding-entry', entryId] });
-        await queryClient.invalidateQueries({ queryKey: ['pond-status', selectedFarmId] });
-      } else {
-        const clientEntryId = uuidv4();
-        const entry = {
-          clientEntryId,
+      const pond = await ensurePondReady();
+      let entry =
+        activeEntry ||
+        (await fetchEntryForDate(selectedFarmId, selectedPondId, feedingDate));
+
+      if (!entry) {
+        const body = {
+          clientEntryId: uuidv4(),
           farmId: selectedFarmId,
           pondId: selectedPondId,
-          cultureCycleId: selectedPond.activeCycle.id,
+          cultureCycleId: pond.activeCycle!.id,
           feedingDate,
-          feedProductId,
-          meals: [
-            {
-              mealNumber: 1,
-              feedQuantityKg: qtyKg,
-              actualTime: mealTime,
-            },
-          ],
+          feedProductId: resolvedFeedProductId,
+          meals: filled.map((row) => ({
+            mealNumber: row.mealNumber,
+            feedQuantityKg: row.quantity,
+            actualTime: to24HourTime(row.hour, '00', row.ampm),
+          })),
           deviceCreatedAt: new Date().toISOString(),
         };
 
         try {
-          const result = await api.post<FeedingEntryDto>('/feeding-entries', entry);
-          queryClient.setQueryData(
-            ['feeding-entry-by-date', selectedPondId, feedingDate],
-            result,
-          );
-          setSaved({
-            pondName: selectedPond.name,
-            mealNumber: 1,
-            quantity: qtyKg,
-            tdf: result.totalDailyFeedKg,
-            status: 'SYNCED',
-          });
-          await queryClient.invalidateQueries({ queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate] });
-          await queryClient.invalidateQueries({ queryKey: ['pond-status', selectedFarmId] });
-        } catch {
-          const local = await saveFeedingLocally(entry, selectedFarmId!);
-          setSaved({
-            pondName: selectedPond.name,
-            mealNumber: 1,
-            quantity: qtyKg,
-            tdf: qtyKg,
-            status: local.localStatus,
-          });
-          await queryClient.invalidateQueries({ queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate] });
+          entry = await api.post<FeedingEntryDto>('/feeding-entries', body);
+        } catch (err) {
+          if (err instanceof ApiError && err.statusCode === 409) {
+            entry = await fetchEntryForDate(selectedFarmId, selectedPondId, feedingDate);
+            if (entry) await persistMeals(entry, filled);
+            else throw err;
+          } else if (!navigator.onLine) {
+            await saveFeedingLocally(body, selectedFarmId);
+          } else {
+            throw err;
+          }
         }
+      } else {
+        if (resolvedFeedProductId && resolvedFeedProductId !== entry.feedProductId) {
+          entry = await api.patch<FeedingEntryDto>(`/feeding-entries/${entry.id}`, {
+            feedProductId: resolvedFeedProductId,
+          });
+        }
+        await persistMeals(entry, filled);
       }
+
+      await queryClient.invalidateQueries({
+        queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate],
+      });
+      const refreshed = await refetchEntry();
+      const latest = refreshed.data || entry;
+      if (latest) {
+        setFeedProductId(latest.feedProductId);
+        setRows(rowsFromEntry(latest));
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['pond-status', selectedFarmId] });
+      await queryClient.invalidateQueries({ queryKey: ['dashboard', selectedFarmId] });
+      setSaveOk(true);
+      setMode('view');
     } catch (err) {
-      console.error(err);
-      setSaveError(err instanceof Error ? err.message : t('sync.failed'));
+      setSaveError(readError(err, t('common.error')));
     } finally {
       setSaving(false);
     }
   };
 
-  if (saved) {
-    return (
-      <AppShell title={t('feeding.confirmTitle')} showNav={false}>
-        <div className="px-4 py-6 space-y-4 text-center">
-          <div className="w-16 h-16 bg-success/20 rounded-full flex items-center justify-center mx-auto">
-            <span className="text-success text-3xl">✓</span>
-          </div>
-          <h2 className="text-xl font-bold">{t('feeding.confirmTitle')}</h2>
-          <div className="card text-left space-y-2">
-            <p className="font-bold text-lg">{saved.pondName}</p>
-            <p>{formatShortDate(feedingDate)} · {mealTime}</p>
-            {displayDoc != null && <p>{t('home.doc', { doc: displayDoc })}</p>}
-            {displayFeedCode && <p>{t('feeding.feedCode')}: {displayFeedCode}</p>}
-            <p>{t('feeding.meal', { number: saved.mealNumber })}: {formatQty(saved.quantity)}</p>
-            <p className="font-semibold">{t('feeding.todayTotal')}: {formatQty(saved.tdf)}</p>
-            <p className="text-sm text-text-secondary">
-              {saved.status === 'SYNCED' ? t('sync.sent') : t('sync.savedOnPhone')}
-            </p>
-          </div>
-          <div className="space-y-2">
-            <button onClick={() => { setSaved(null); setQuantity(''); setMealTime(getDefaultMealTime()); setShowAddForm(true); }} className="btn-secondary">
-              {t('feeding.addMeal')}
-            </button>
-            <button onClick={() => { setSaved(null); setShowAddForm(false); setFeedingDate(getTodayISO()); }} className="btn-secondary">
-              {t('feeding.viewFeeds')}
-            </button>
-            <Link to="/feeding/entry" onClick={goToTankList} className="btn-secondary block text-center">
-              {t('feeding.addAnotherTank')}
-            </Link>
-            <button onClick={() => navigate('/')} className="btn-primary">
-              {t('feeding.backHome')}
-            </button>
-          </div>
-        </div>
-      </AppShell>
-    );
-  }
-
-  if (entryId && !selectedPondId) {
-    return (
-      <AppShell showNav={false}>
-        <p className="text-center text-text-secondary py-8">{t('common.loading')}</p>
-      </AppShell>
-    );
-  }
-
   if (!selectedPondId) {
     return (
-      <AppShell title={t('feeding.selectTank')}>
-        <div className="px-4 py-4 space-y-3">
-          {ponds?.map((pond) => (
-            <button
-              key={pond.id}
-              onClick={() => navigate(`/feeding/entry?pondId=${pond.id}`)}
-              className="card w-full text-left min-h-touch"
-            >
-              <h3 className="text-xl font-bold text-primary">{pond.name}</h3>
-              {pond.activeCycle && (
-                <p className="text-sm text-text-secondary">
-                  DOC {pond.activeCycle.doc} — {pond.activeCycle.species}
-                </p>
-              )}
-            </button>
-          ))}
-        </div>
-      </AppShell>
-    );
-  }
-
-  if (selectedPondId && !showAddForm) {
-    const overviewDoc =
-      existingEntry?.doc ??
-      (stockingDate ? calculateDoc(stockingDate, feedingDate) : selectedPond?.activeCycle?.doc);
-    const overviewFeedCode = existingEntry?.feedCode ?? selectedProduct?.feedCode;
-
-    return (
-      <AppShell title={selectedPond?.name || t('feeding.selectTank')} showNav={false}>
-        <div className="px-4 py-4 space-y-4 overflow-x-hidden">
-          <button
-            type="button"
-            onClick={goToTankList}
-            className="flex items-center gap-1 text-sm text-primary font-medium"
-          >
-            <ArrowLeft size={18} />
-            {t('feeding.changeTank')}
-          </button>
-
-          <div className="rounded-xl border border-border bg-primary-light p-3 space-y-2">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h2 className="font-bold text-lg text-primary leading-tight truncate">
-                  {selectedPond?.name}
-                </h2>
-                <div className="text-xs text-text-secondary mt-1">
-                  <span className="font-medium text-text-primary">DOC {overviewDoc ?? '—'}</span>
-                  <span className="mx-2">•</span>
-                  <span>
-                    {t('feeding.feedCode')}: <span className="font-medium text-text-primary">{overviewFeedCode ?? '—'}</span>
-                  </span>
-                </div>
-              </div>
-              {existingEntry && (
-                <div className="text-right shrink-0">
-                  <div className="text-[11px] text-text-secondary leading-none">
-                    {dayTotalLabel}
-                  </div>
-                  <div className="font-bold text-lg text-text-primary leading-tight">
-                    {formatQty(existingEntry.totalDailyFeedKg)}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <FeedingDateSelector
-              feedingDate={feedingDate}
-              todayISO={todayISO}
-              yesterdayISO={yesterdayISO}
-              onDateChange={handleDateChange}
-              t={t}
-            />
-
-            <button
-              type="button"
-              onClick={() => void openDailyTankReport()}
-              className="btn-secondary flex items-center justify-center gap-2 !py-2"
-            >
-              <FileText size={18} />
-              {t('reports.viewDailyTank')}
-            </button>
+      <AppShell
+        title={t('feeding.title')}
+        onBack={() => navigate(isOwner ? '/dashboard' : '/')}
+      >
+        <div className="px-4 py-4 space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm text-text-secondary">{t('tanks.tapToOpen')}</p>
+            <AddTankButton compact onCreated={(pond) => handleTankPick(pond.id)} />
           </div>
 
-          {existingEntry && existingEntry.meals.length > 0 ? (
-            <div className="card p-0 overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-surface">
-                  <tr>
-                    <th className="p-2 text-left">{t('feeding.mealCol')}</th>
-                    <th className="p-2 text-right">{t('feeding.quantity')}</th>
-                    <th className="p-2 text-right">{t('feeding.time')}</th>
-                    {canEditEntry && (
-                      <th className="p-2 text-right w-16">{t('common.edit')}</th>
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {existingEntry.meals.map((meal) => (
-                    <tr key={meal.id} className="border-t border-border">
-                      <td className="p-2">{meal.mealNumber}</td>
-                      <td className="p-2 text-right font-medium">{formatQty(meal.feedQuantityKg)}</td>
-                      <td className="p-2 text-right text-text-secondary">{meal.actualTime || '—'}</td>
-                      {canEditEntry && (
-                        <td className="p-2 text-right">
-                          <button
-                            type="button"
-                            onClick={() => openMealEditor(meal)}
-                            className="inline-flex items-center justify-center min-h-touch min-w-touch text-primary"
-                            aria-label={t('feeding.editMeal', { number: meal.mealNumber })}
-                          >
-                            <Pencil size={18} />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="p-3 border-t border-border flex justify-between items-center bg-primary-light/50">
-                <span className="text-sm font-medium">{dayTotalLabel}</span>
-                <span className="font-bold text-lg">{formatQty(existingEntry.totalDailyFeedKg)}</span>
-              </div>
-            </div>
-          ) : (
-            <div className="card text-center py-8">
-              <p className="text-text-secondary">{t('feeding.noMealsYet')}</p>
-            </div>
-          )}
-
-          {editingMeal && (
-            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
-              <div className="card w-full max-w-md space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-lg">
-                    {t('feeding.editMeal', { number: editingMeal.mealNumber })}
-                  </h3>
-                  <button type="button" onClick={closeMealEditor} className="text-text-secondary">
-                    <X size={22} />
-                  </button>
-                </div>
-
-                <div className="flex gap-1">
-                  {(['kg', 'ton'] as QuantityUnit[]).map((u) => (
-                    <button
-                      key={u}
-                      type="button"
-                      onClick={() => setEditQuantityUnit(u)}
-                      className={`px-3 py-1 rounded-full text-sm font-medium ${
-                        editQuantityUnit === u ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
-                      }`}
-                    >
-                      {u === 'kg' ? t('common.kg') : t('common.ton')}
-                    </button>
-                  ))}
-                </div>
-
-                <NumericQuantityInput
-                  value={editQuantity}
-                  onChange={setEditQuantity}
-                  label={t('feeding.quantityKg')}
-                />
-
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-text-secondary shrink-0">{t('feeding.time')}</span>
-                  <select
-                    value={editMealHour}
-                    onChange={(e) => setEditMealTime(`${e.target.value}:${editMealMinute || '00'}`)}
-                    className="input-compact flex-1 min-w-0"
-                  >
-                    {Array.from({ length: 24 }, (_, i) => {
-                      const h = String(i).padStart(2, '0');
-                      return (
-                        <option key={h} value={h}>
-                          {h}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  <span className="font-semibold">:</span>
-                  <select
-                    value={editMealMinute}
-                    onChange={(e) => setEditMealTime(`${editMealHour || '00'}:${e.target.value}`)}
-                    className="input-compact w-20 shrink-0"
-                  >
-                    {Array.from({ length: 60 }, (_, i) => {
-                      const m = String(i).padStart(2, '0');
-                      return (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-
-                {editError && <p className="text-danger text-sm">{editError}</p>}
-
-                <div className="flex gap-2">
-                  <button type="button" onClick={closeMealEditor} className="btn-secondary flex-1">
-                    {t('common.cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleSaveMealEdit()}
-                    disabled={editSaving || !editQuantity}
-                    className="btn-primary flex-1"
-                  >
-                    {editSaving ? t('common.loading') : t('common.save')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {!canEditEntry && <RecordLockNotice />}
-
-          {canEditEntry ? (
-            <div className="sticky bottom-0 bg-background pt-2 pb-4 space-y-2">
+          <div className="grid grid-cols-2 gap-3">
+            {ponds?.map((pond) => (
               <button
+                key={pond.id}
                 type="button"
-                onClick={() => setScanOpen(true)}
-                className="btn-secondary flex items-center justify-center gap-2"
+                onClick={() => handleTankPick(pond.id)}
+                className="card text-left min-h-[88px] border-2 border-primary/30 bg-primary-light/40"
               >
-                <ScanLine size={20} />
-                {t('feeding.scan.title')}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAddForm(true);
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }}
-                className="btn-primary flex items-center justify-center gap-2"
-              >
-                <Plus size={20} />
-                {existingEntry ? t('feeding.addMeal') : t('feeding.addFeed')}
-              </button>
-              <button type="button" onClick={() => navigate('/')} className="btn-secondary">
-                {t('feeding.backHome')}
-              </button>
-            </div>
-          ) : (
-            <div className="sticky bottom-0 bg-background pt-2 pb-4">
-              <button type="button" onClick={() => navigate('/')} className="btn-secondary w-full">
-                {t('feeding.backHome')}
-              </button>
-            </div>
-          )}
-
-          {selectedPond?.activeCycle && feedProducts && (
-            <ScanSheetModal
-              isOpen={scanOpen}
-              onClose={() => setScanOpen(false)}
-              feedingDate={feedingDate}
-              selectedFarmId={selectedFarmId!}
-              pondId={selectedPondId}
-              cultureCycleId={selectedPond.activeCycle.id}
-              feedProducts={feedProducts}
-              existingEntry={existingEntry ?? null}
-              onSaved={() => void refetchEntryForDate()}
-            />
-          )}
-
-          {dailyReportOpen && (
-            <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
-              <div className="w-full bg-background rounded-t-2xl p-4 pb-6 max-h-[92dvh] overflow-y-auto animate-slide-in-up">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">{t('reports.dailyTankTitle')}</p>
-                    <p className="text-xs text-text-secondary truncate">
-                      {selectedPond?.name} • {feedingDate}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setDailyReportOpen(false)}
-                    className="min-h-touch min-w-touch flex items-center justify-center"
-                  >
-                    <X />
-                  </button>
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="text-base font-bold text-primary">{pond.name}</h3>
+                  <span className="rounded-md bg-primary text-white text-xs font-bold px-2 py-0.5">
+                    #{pond.code}
+                  </span>
                 </div>
+              </button>
+            ))}
+          </div>
 
-                {dailyReportLoading && (
-                  <div className="card">
-                    <p className="text-text-secondary">{t('common.loading')}</p>
-                  </div>
-                )}
-
-                {dailyReportError && (
-                  <div className="card border-danger text-danger text-sm">
-                    {dailyReportError}
-                  </div>
-                )}
-
-                {dailyReport && (
-                  <>
-                    <div className="card">
-                      <p className="font-semibold">{dailyReport.summary.totalEntries} entries</p>
-                      <p className="text-2xl font-bold">{dailyReport.summary.periodTotalKg} kg</p>
-                    </div>
-
-                    {dailyReport.rows?.[0] && (
-                      <div className="card space-y-2 text-sm">
-                        <div className="flex justify-between">
-                          <span className="text-text-secondary">DOC</span>
-                          <span className="font-semibold">{String(dailyReport.rows[0].doc ?? '—')}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-text-secondary">Feed</span>
-                          <span className="font-semibold">{String(dailyReport.rows[0].feedCode ?? '—')}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-text-secondary">Cumulative</span>
-                          <span className="font-semibold">{String(dailyReport.rows[0].cumulative ?? '—')}</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-border text-xs">
-                          <div className="flex justify-between"><span className="text-text-secondary">M1</span><span className="font-medium">{String(dailyReport.rows[0].meal1 ?? '')}</span></div>
-                          <div className="flex justify-between"><span className="text-text-secondary">M2</span><span className="font-medium">{String(dailyReport.rows[0].meal2 ?? '')}</span></div>
-                          <div className="flex justify-between"><span className="text-text-secondary">M3</span><span className="font-medium">{String(dailyReport.rows[0].meal3 ?? '')}</span></div>
-                          <div className="flex justify-between"><span className="text-text-secondary">M4</span><span className="font-medium">{String(dailyReport.rows[0].meal4 ?? '')}</span></div>
-                          <div className="flex justify-between"><span className="text-text-secondary">M5</span><span className="font-medium">{String(dailyReport.rows[0].meal5 ?? '')}</span></div>
-                          <div className="flex justify-between"><span className="text-text-secondary">TDF</span><span className="font-semibold">{String(dailyReport.rows[0].tdf ?? '')}</span></div>
-                        </div>
-                      </div>
-                    )}
-
-                    {isOwner && dailyReport.id !== 'local' ? (
-                      <div className="grid grid-cols-2 gap-2">
-                        <button onClick={() => downloadDailyReport('pdf')} className="btn-secondary !text-sm">
-                          {t('reports.downloadPdf')}
-                        </button>
-                        <button onClick={() => downloadDailyReport('excel')} className="btn-secondary !text-sm">
-                          {t('reports.downloadExcel')}
-                        </button>
-                        <button onClick={() => void shareDailyReport()} className="btn-secondary !text-sm">
-                          {t('reports.share')}
-                        </button>
-                        <button onClick={() => window.print()} className="btn-secondary !text-sm">
-                          {t('reports.print')}
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-2">
-                        <button onClick={() => void shareDailyReport()} className="btn-secondary !text-sm">
-                          {t('reports.share')}
-                        </button>
-                        <button onClick={() => window.print()} className="btn-secondary !text-sm">
-                          {t('reports.print')}
-                        </button>
-                      </div>
-                    )}
-
-                    {isOwner && (
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/reports?pondId=${selectedPondId}&date=${feedingDate}`)}
-                        className="btn-primary"
-                      >
-                        {t('reports.openFull')}
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
+          {!ponds?.length && (
+            <div className="card space-y-3">
+              <p className="text-sm text-text-secondary">{t('tanks.noTanks')}</p>
+              <AddTankButton onCreated={(pond) => handleTankPick(pond.id)} />
             </div>
           )}
         </div>
@@ -905,213 +425,223 @@ export function FeedingEntryPage() {
   }
 
   return (
-    <AppShell title={selectedPond?.name || t('feeding.selectTank')} showNav={false}>
-      <div className="px-4 py-4 space-y-4 overflow-x-hidden">
-        <button
-          type="button"
-          onClick={goToTankOverview}
-          className="flex items-center gap-1 text-sm text-primary font-medium"
-        >
-          <ArrowLeft size={18} />
-          {t('feeding.viewFeeds')}
-        </button>
+    <AppShell
+      title={t('feeding.title')}
+      onBack={goToTankList}
+    >
+      <div className="px-4 py-3 space-y-3 max-w-lg mx-auto">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={goToTankList}
+            className="flex-1 min-w-0 card py-2.5 px-3 text-left border border-primary/30"
+          >
+            <p className="text-base font-bold text-primary truncate">
+              {selectedPond?.name}
+              {selectedPond?.code ? ` (#${selectedPond.code})` : ''}
+            </p>
+          </button>
+          <input
+            type="date"
+            value={feedingDate}
+            max={todayISO}
+            onChange={(e) => handleDateChange(e.target.value)}
+            className="input-compact !w-[118px] !py-1.5 !px-2 !text-xs shrink-0"
+            aria-label={t('feeding.selectDate')}
+          />
+          {canEdit && hasSavedEntry && mode === 'view' && (
+            <button
+              type="button"
+              onClick={startEditing}
+              className="btn-secondary btn-inline !text-xs !py-1.5 !px-2.5 !min-h-0 shrink-0 flex items-center gap-1"
+            >
+              <Pencil size={14} />
+              {t('common.edit')}
+            </button>
+          )}
+          {hasSavedEntry && mode !== 'view' && (
+            <button
+              type="button"
+              onClick={cancelEditing}
+              className="btn-secondary btn-inline !text-xs !py-1.5 !px-2.5 !min-h-0 shrink-0"
+            >
+              {t('common.cancel')}
+            </button>
+          )}
+        </div>
 
-        <div className="rounded-xl border border-border bg-primary-light px-3 py-2">
-          <div className="flex items-center justify-between gap-3 text-sm">
-            <div className="min-w-0 text-text-secondary">
-              <span className="font-medium text-text-primary">DOC {displayDoc ?? '—'}</span>
-              {displayFeedCode && (
-                <>
-                  <span className="mx-2">•</span>
-                  <span>
-                    {t('feeding.feedCode')}: <span className="font-medium text-text-primary">{displayFeedCode}</span>
-                  </span>
-                </>
-              )}
-            </div>
-            {existingEntry && (
-              <div className="text-right shrink-0">
-                <div className="text-[11px] text-text-secondary leading-none">{dayTotalLabel}</div>
-                <div className="font-bold text-base text-text-primary leading-tight">
-                  {formatQty(existingEntry.totalDailyFeedKg)}
+        {!canEdit && <RecordLockNotice />}
+
+        <div className="space-y-2 pb-32">
+          <div className="grid grid-cols-[68px_1fr_minmax(0,1.05fr)] gap-2 px-0.5 text-[11px] font-medium text-text-secondary">
+            <span>{t('feeding.feedCode')}</span>
+            <span>{t('feeding.quantity')}</span>
+            <span>{t('feeding.time')}</span>
+          </div>
+
+          {rows.map((row, index) => {
+            const isSavedRow = !!row.mealId;
+            const isViewMode = (hasSavedEntry && mode === 'view') || !canEdit;
+            const isAddLockedRow = mode === 'add' && isSavedRow;
+            const rowEditable = canEdit && !isViewMode && !isAddLockedRow;
+            const showReadonly = isViewMode || isAddLockedRow;
+            const showFeedCodeSelect =
+              !showReadonly &&
+              (mode === 'edit'
+                ? index === 0
+                : !activeEntry
+                  ? index === 0
+                  : !row.mealId);
+
+            const canDeleteRow = rowEditable && !row.mealId && (hasSavedEntry || rows.filter((r) => !r.mealId).length > 1);
+
+            const feedLabel = t('feeding.feedLabel', { number: index + 1 });
+
+            return (
+              <div key={row.key} className="rounded-lg border border-border bg-surface p-2 space-y-1.5">
+                <div className="flex items-center justify-between gap-2 px-0.5">
+                  <p className="text-xs font-semibold text-primary">{feedLabel}</p>
+                  {canDeleteRow && (
+                    <button
+                      type="button"
+                      onClick={() => removeRow(row.key)}
+                      className="min-h-0 min-w-0 w-6 h-6 flex items-center justify-center rounded-md border border-border text-text-secondary hover:text-danger hover:border-danger/40"
+                      aria-label={t('feeding.removeFeed')}
+                    >
+                      <Minus size={14} />
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-[68px_1fr_minmax(0,1.05fr)] gap-2 items-center">
+                  {showReadonly ? (
+                    <>
+                      <span className="text-sm font-semibold text-primary px-1">{feedCodeLabel}</span>
+                      <span className="text-sm font-semibold px-1">{formatQty(row.quantity)}</span>
+                      <span className="text-sm font-semibold px-1">{row.hour} {row.ampm}</span>
+                    </>
+                  ) : (
+                    <>
+                      {showFeedCodeSelect ? (
+                        <select
+                          value={resolvedFeedProductId}
+                          onChange={(e) => setFeedProductId(e.target.value)}
+                          disabled={!sortedFeedProducts?.length || (mode === 'add' && isSavedRow)}
+                          className="input-compact w-full !py-2 !px-1.5 !text-sm font-semibold"
+                        >
+                          {!sortedFeedProducts?.length && <option value="">{t('common.loading')}</option>}
+                          {sortedFeedProducts?.map((fp) => (
+                            <option key={fp.id} value={fp.id}>
+                              {fp.feedCode}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-sm font-semibold text-primary px-1">{feedCodeLabel}</span>
+                      )}
+
+                      <div className="relative min-w-0">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={row.quantity}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === '' || /^\d*\.?\d{0,3}$/.test(v)) {
+                              updateRow(row.key, { quantity: v });
+                            }
+                          }}
+                          disabled={!rowEditable}
+                          className="input-compact w-full !py-2 !pl-2 !pr-[3.25rem] !text-sm font-semibold disabled:opacity-60"
+                          placeholder="0"
+                        />
+                        <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+                          <div className="relative flex items-center">
+                            <select
+                              value={row.quantityUnit}
+                              onChange={(e) => {
+                                const nextUnit = e.target.value as QuantityUnit;
+                                updateRow(row.key, {
+                                  quantityUnit: nextUnit,
+                                  quantity: convertQuantityUnit(row.quantity, row.quantityUnit, nextUnit),
+                                });
+                              }}
+                              disabled={!rowEditable}
+                              aria-label={t('feeding.quantityUnit')}
+                              className="appearance-none bg-transparent border-0 py-0 pl-0 pr-3.5 text-[11px] font-semibold text-text-secondary cursor-pointer focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                              <option value="kg">{t('common.kg')}</option>
+                              <option value="ton">{t('common.ton')}</option>
+                            </select>
+                            <ChevronDown
+                              size={12}
+                              className="absolute right-0 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1 min-w-0">
+                        <select
+                          value={row.hour}
+                          onChange={(e) => updateRow(row.key, { hour: e.target.value })}
+                          disabled={!rowEditable}
+                          className="input-compact flex-1 min-w-0 !py-2 !px-1 !text-sm text-center disabled:opacity-60"
+                        >
+                          {Array.from({ length: 12 }, (_, i) => String(i + 1)).map((h) => (
+                            <option key={h} value={h}>{h}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={row.ampm}
+                          onChange={(e) => updateRow(row.key, { ampm: e.target.value as 'AM' | 'PM' })}
+                          disabled={!rowEditable}
+                          className="input-compact w-12 !py-2 !px-0.5 !text-xs font-semibold text-center disabled:opacity-60"
+                        >
+                          <option value="AM">AM</option>
+                          <option value="PM">PM</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
-            )}
-          </div>
-        </div>
+            );
+          })}
 
-        {!canEditEntry && <RecordLockNotice />}
-
-        {canEditEntry ? (
-        <>
-        {feedProducts && feedProducts.length > 0 && !existingEntry && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="label mb-0 shrink-0">{t('feeding.feedCode')}</span>
-            {feedProducts.map((fp) => (
-              <button
-                key={fp.id}
-                type="button"
-                onClick={() => setFeedProductId(fp.id)}
-                className={`min-h-touch px-4 rounded-lg font-bold text-base border-2 ${
-                  feedProductId === fp.id
-                    ? 'bg-primary text-white border-primary'
-                    : 'bg-surface text-primary border-border'
-                }`}
-              >
-                {fp.feedCode}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className={`card w-full min-w-0 overflow-hidden p-4 space-y-3 ${justOpenedForm ? 'animate-slide-in-up' : ''}`}>
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">
-              {t('feeding.meal', { number: nextMealNumber })}
-            </p>
-            <div className="flex gap-1">
-              {(['kg', 'ton'] as QuantityUnit[]).map((u) => (
-                <button
-                  key={u}
-                  type="button"
-                  onClick={() => setQuantityUnit(u)}
-                  className={`px-3 py-1 rounded-full text-sm font-medium ${
-                    quantityUnit === u ? 'bg-primary text-white' : 'bg-surface text-text-secondary'
-                  }`}
-                >
-                  {u === 'kg' ? t('common.kg') : t('common.ton')}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            {dateLocked ? (
-              <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="text-text-secondary">{t('feeding.date')}</span>
-                <span className="font-semibold">{formatShortDate(feedingDate)}</span>
-              </div>
-            ) : (
-              <FeedingDateSelector
-                feedingDate={feedingDate}
-                todayISO={todayISO}
-                yesterdayISO={yesterdayISO}
-                onDateChange={handleDateChange}
-                t={t}
-              />
-            )}
-
-            <div className="flex items-center gap-2 w-full min-w-0">
-              <span className="text-sm text-text-secondary shrink-0">{t('feeding.time')}</span>
-              <select
-                value={mealHour}
-                onChange={(e) => handleMealHourChange(e.target.value)}
-                className="input-compact flex-1 min-w-0"
-                aria-label={t('feeding.time')}
-              >
-                {Array.from({ length: 24 }, (_, i) => {
-                  const h = String(i).padStart(2, '0');
-                  const label = new Date(2000, 0, 1, i).toLocaleTimeString('en-IN', {
-                    hour: 'numeric',
-                    hour12: true,
-                  });
-                  return (
-                    <option key={h} value={h}>
-                      {label}
-                    </option>
-                  );
-                })}
-              </select>
-              <span className="text-lg font-semibold text-text-secondary shrink-0">:</span>
-              <select
-                value={mealMinute}
-                onChange={(e) => handleMealMinuteChange(e.target.value)}
-                className="input-compact w-20 shrink-0"
-                aria-label={t('feeding.time')}
-              >
-                {Array.from({ length: 60 }, (_, i) => {
-                  const m = String(i).padStart(2, '0');
-                  return (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-3">
-            <span className="label mb-0">{t('feeding.quantity')}</span>
-            {suggestedQty && quantity === '' && (
-              <button
-                type="button"
-                onClick={() => setQuantity(suggestedQty)}
-                className="text-sm font-medium text-primary"
-              >
-                {t('feeding.useLastQty', { qty: formatQty(suggestedQty) })}
-              </button>
-            )}
-          </div>
-          <NumericQuantityInput
-            value={quantity}
-            onChange={setQuantity}
-            unit={quantityUnit}
-          />
-        </div>
-
-        {confirmLarge && (
-          <div className="card border-warning">
-            <p className="text-sm mb-3">
-              {t('feeding.confirmLarge', {
-                usual: usualQty,
-                entered: quantity,
-              })}
-            </p>
-            <div className="flex gap-2">
-              <button onClick={() => setConfirmLarge(false)} className="btn-secondary flex-1">
-                {t('common.cancel')}
-              </button>
-              <button
-                onClick={() => { setConfirmLarge(false); void handleSave(true); }}
-                className="btn-primary flex-1"
-              >
-                {t('common.confirm')}
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="sticky bottom-0 bg-background pt-2 pb-4 space-y-2">
-          {saveError && (
-            <div className="rounded-xl border border-danger bg-surface p-3 text-danger text-sm">
-              {saveError}
-            </div>
-          )}
-          <div className="flex items-stretch gap-2">
-            <div className="flex-1 rounded-xl border border-border bg-surface p-3 flex items-center justify-between">
-              <span className="text-sm text-text-secondary">{dayTotalLabel}</span>
-              <span className="font-bold text-lg">{formatQty(currentTdf)}</span>
-            </div>
+          {canEdit && (
             <button
-              onClick={() => void handleSave()}
-              disabled={!quantity || parseFloat(quantity) <= 0 || saving}
-              className="btn-primary w-auto px-5 text-base shrink-0"
+              type="button"
+              onClick={addRow}
+              className="btn-secondary btn-inline flex items-center gap-1.5 !text-sm !py-2"
             >
-              {saving ? t('common.loading') : existingEntry ? t('feeding.saveMeal') : t('feeding.save')}
+              <Plus size={14} />
+              {t('feeding.addFeed')}
             </button>
+          )}
+        </div>
+
+        <div className="sticky bottom-20 z-10 bg-background pt-2 pb-3 space-y-1.5 -mx-4 px-4 border-t border-border/60">
+          {saveError && <p className="text-danger text-xs">{saveError}</p>}
+          {saveOk && <p className="text-success text-xs font-medium">{t('feeding.saved')}</p>}
+
+          <div className="flex items-stretch gap-2">
+            <div className="flex-1 rounded-lg border border-border bg-surface px-3 py-2 flex items-center justify-between">
+              <span className="text-xs text-text-secondary">{t('feeding.todayTotal')}</span>
+              <span className="font-bold text-base">{formatQty(dayTotal)}</span>
+            </div>
+            {canEdit && isFormActive && (
+              <button
+                type="button"
+                onClick={() => void handleSaveAll()}
+                disabled={saving || !rows.some((r) => formatFeedQtyKg(r.quantity, r.quantityUnit))}
+                className="btn-primary btn-inline !py-2"
+              >
+                {saving ? t('common.loading') : t('common.save')}
+              </button>
+            )}
           </div>
         </div>
-        </>
-        ) : (
-          <div className="sticky bottom-0 bg-background pt-2 pb-4">
-            <button type="button" onClick={goToTankOverview} className="btn-secondary w-full">
-              {t('feeding.viewFeeds')}
-            </button>
-          </div>
-        )}
       </div>
     </AppShell>
   );
 }
-

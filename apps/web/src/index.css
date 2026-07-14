@@ -72,6 +72,10 @@ input[type='date'] {
            transition-colors w-full;
   }
 
+  .btn-inline {
+    @apply !w-auto shrink-0 px-4 py-2.5 text-base;
+  }
+
   .btn-secondary {
     @apply bg-surface text-primary border-2 border-primary font-semibold rounded-lg
            min-h-touch px-6 py-3 text-lg active:bg-primary-light transition-colors w-full;

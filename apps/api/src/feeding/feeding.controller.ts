@@ -55,6 +55,16 @@ export class FeedingController {
     return this.feeding.findOne(id, role);
   }
 
+  @Patch(':id')
+  async updateEntry(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.feeding.updateEntry(id, body, userId, role);
+  }
+
   @Post()
   async create(
     @Body() body: Record<string, unknown>,

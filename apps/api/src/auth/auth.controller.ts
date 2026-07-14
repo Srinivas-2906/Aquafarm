@@ -4,9 +4,10 @@ import { IsString, Matches, MinLength, MaxLength, Length } from 'class-validator
 import { Response, Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { JwtAuthGuard } from '../common/guards/auth.guards';
-import { CurrentUser } from '../common/decorators/auth.decorators';
+import { JwtAuthGuard, RolesGuard } from '../common/guards/auth.guards';
+import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
 import { ConfigService } from '@nestjs/config';
+import { UserRole } from '@prisma/client';
 
 class LoginDto {
   @ApiProperty({ example: '9985533376' })
@@ -65,6 +66,29 @@ class RequestOtpDto {
   @IsString()
   @Matches(/^[6-9]\d{9}$/)
   phoneNumber!: string;
+}
+
+class InviteSupervisorDto {
+  @ApiProperty({ example: 'farm-uuid' })
+  @IsString()
+  farmId!: string;
+
+  @ApiProperty({ example: '9985533376' })
+  @IsString()
+  @Matches(/^[6-9]\d{9}$/)
+  phoneNumber!: string;
+
+  @ApiProperty({ example: '123456' })
+  @IsString()
+  @Matches(/^\d{6}$/)
+  pin!: string;
+}
+
+class SetPinDto {
+  @ApiProperty({ example: '123456' })
+  @IsString()
+  @Matches(/^\d{6}$/)
+  newPin!: string;
 }
 
 @ApiTags('auth')
@@ -132,6 +156,25 @@ export class AuthController {
   @ApiBearerAuth()
   async me(@CurrentUser('sub') userId: string) {
     return this.auth.getMe(userId);
+  }
+
+  @Post('invite-supervisor')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.OWNER)
+  @ApiBearerAuth()
+  async inviteSupervisor(
+    @Body() dto: InviteSupervisorDto,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.auth.inviteSupervisor(dto, { userId, organizationId });
+  }
+
+  @Post('set-pin')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  async setPin(@Body() dto: SetPinDto, @CurrentUser('sub') userId: string) {
+    return this.auth.setPin(userId, dto.newPin);
   }
 
   private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {

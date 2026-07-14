@@ -9,6 +9,7 @@ interface AuthContextType {
   selectedFarmId: string | null;
   setSelectedFarmId: (id: string) => void;
   login: (phone: string, pin: string) => Promise<void>;
+  refreshMe: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -29,8 +30,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .then((u) => {
           setUser(u);
           db.userProfile.put(u);
-          if (!selectedFarmId && u.farms.length > 0) {
-            setSelectedFarmId(u.farms[0].farmId);
+          // Do not auto-select a farm: user must explicitly choose one.
+          // If a previously selected farm is no longer accessible, clear it.
+          const stored = localStorage.getItem('selectedFarmId');
+          if (stored && !u.farms.some((f) => f.farmId === stored)) {
+            localStorage.removeItem('selectedFarmId');
+            setSelectedFarmId(null);
           }
         })
         .catch(async () => {
@@ -55,11 +60,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('accessToken', result.accessToken);
     setUser(result.user);
     await db.userProfile.put(result.user);
-    if (result.user.farms.length > 0) {
-      const farmId = result.user.farms[0].farmId;
-      setSelectedFarmId(farmId);
-      localStorage.setItem('selectedFarmId', farmId);
-    }
+    // Force explicit farm selection after login.
+    localStorage.removeItem('selectedFarmId');
+    setSelectedFarmId(null);
+  }, []);
+
+  const refreshMe = useCallback(async () => {
+    const token = localStorage.getItem('accessToken');
+    if (!token) return;
+    const u = await authApi.me();
+    setUser(u);
+    await db.userProfile.put(u);
   }, []);
 
   const logout = useCallback(async () => {
@@ -69,7 +80,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       /* ignore */
     }
     localStorage.removeItem('accessToken');
+    localStorage.removeItem('selectedFarmId');
     setUser(null);
+    setSelectedFarmId(null);
   }, []);
 
   const handleSetFarm = useCallback((id: string) => {
@@ -85,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         selectedFarmId,
         setSelectedFarmId: handleSetFarm,
         login,
+        refreshMe,
         logout,
       }}
     >

@@ -1,11 +1,16 @@
 import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
-import { differenceInCalendarDays, parseISO, startOfDay } from 'date-fns';
+import { differenceInCalendarDays, startOfDay } from 'date-fns';
+
+/** Parse YYYY-MM-DD as UTC midnight so DB date comparisons stay consistent. */
+export function parseDateOnly(dateISO: string): Date {
+  return new Date(`${dateISO}T00:00:00.000Z`);
+}
 
 export function getFarmToday(timezone: string): Date {
   const now = new Date();
   const zonedNow = toZonedTime(now, timezone);
   const dateStr = formatInTimeZone(zonedNow, timezone, 'yyyy-MM-dd');
-  return parseISO(dateStr);
+  return parseDateOnly(dateStr);
 }
 
 export function formatFarmDate(date: Date, timezone: string): string {

@@ -1,9 +1,24 @@
 import {
   calculateDoc,
+  getFarmToday,
   isDateEditableBySupervisor,
   isLateOfflineSubmission,
+  parseDateOnly,
   sumDecimals,
 } from './date.utils';
+
+describe('parseDateOnly', () => {
+  it('parses calendar dates at UTC midnight', () => {
+    expect(parseDateOnly('2026-07-13').toISOString()).toBe('2026-07-13T00:00:00.000Z');
+  });
+});
+
+describe('getFarmToday', () => {
+  it('matches parseDateOnly for the farm timezone calendar day', () => {
+    const today = getFarmToday('Asia/Kolkata');
+    expect(today.toISOString().endsWith('T00:00:00.000Z')).toBe(true);
+  });
+});
 
 describe('calculateDoc', () => {
   it('returns 1 on stocking date', () => {

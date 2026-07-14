@@ -1,26 +1,92 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Home, Utensils, Package, LayoutDashboard, MoreHorizontal, Calculator, FileText } from 'lucide-react';
+import { Home, Utensils, Package, LayoutDashboard, MoreHorizontal, Calculator, FileText, X, ArrowLeft, ChevronDown } from 'lucide-react';
 import { ConnectivityBanner } from '@/hooks/useOnline';
 import { useAuth } from '@/contexts/AuthContext';
 import { UserRole } from '@/types/roles';
+import { api } from '@/lib/api';
+import type { FarmDto } from '@aqualedger/contracts';
+import { useState } from 'react';
 
 interface AppShellProps {
   children: React.ReactNode;
   title?: string;
   showNav?: boolean;
+  onBack?: () => void;
+  farmSelector?: boolean;
 }
 
-export function AppShell({ children, title, showNav = true }: AppShellProps) {
-  const { user } = useAuth();
+export function AppShell({ children, title, showNav = true, onBack, farmSelector = false }: AppShellProps) {
+  const { user, selectedFarmId } = useAuth();
   const isOwner = user?.role === UserRole.OWNER;
+  const navigate = useNavigate();
+  const [changeOpen, setChangeOpen] = useState(false);
+
+  const { data: farm } = useQuery({
+    queryKey: ['farm', selectedFarmId],
+    queryFn: () => api.get<FarmDto>(`/farms/${selectedFarmId}`),
+    enabled: !!user && !!selectedFarmId && !farmSelector,
+    staleTime: 60_000,
+  });
+
+  const showHeader = !!title || farmSelector;
 
   return (
     <div className="min-h-dvh flex flex-col bg-background">
       <ConnectivityBanner />
-      {title && (
+      {showHeader && (
         <header className="bg-primary text-white px-4 py-3 sticky top-0 z-10 shadow-sm">
-          <h1 className="text-lg font-semibold">{title}</h1>
+          {farmSelector ? (
+            <div className="flex items-center gap-2">
+              <div className="min-w-touch shrink-0">
+                {onBack && (
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="min-h-touch min-w-touch flex items-center justify-center text-white"
+                    aria-label="Back"
+                  >
+                    <ArrowLeft size={22} />
+                  </button>
+                )}
+              </div>
+              <div className="flex-1 flex items-center justify-center min-w-0">
+                <FarmHeaderSelect />
+              </div>
+              <div className="min-w-touch shrink-0" aria-hidden />
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                {onBack && (
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="min-h-touch min-w-touch flex items-center justify-center text-white shrink-0"
+                    aria-label="Back"
+                  >
+                    <ArrowLeft size={22} />
+                  </button>
+                )}
+                <div className="min-w-0">
+                  <h1 className="text-lg font-semibold truncate">{title}</h1>
+                  {farm?.name && (
+                    <p className="text-xs text-white/80 truncate">{farm.name}</p>
+                  )}
+                </div>
+              </div>
+              {user && (
+                <button
+                  type="button"
+                  onClick={() => setChangeOpen(true)}
+                  className="text-sm font-medium text-white/90 underline underline-offset-4"
+                >
+                  Change
+                </button>
+              )}
+            </div>
+          )}
         </header>
       )}
       <main className="flex-1 pb-20 overflow-y-auto">{children}</main>
@@ -28,6 +94,41 @@ export function AppShell({ children, title, showNav = true }: AppShellProps) {
         <nav className="fixed bottom-0 left-0 right-0 bg-surface border-t border-border z-20 no-print">
           {isOwner ? <OwnerNav /> : <SupervisorNav />}
         </nav>
+      )}
+
+      {changeOpen && user && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+          <div className="card w-full max-w-md space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-lg">Change</h3>
+              <button type="button" onClick={() => setChangeOpen(false)} className="text-text-secondary">
+                <X size={22} />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setChangeOpen(false);
+                navigate('/feeding/entry');
+              }}
+              className="btn-secondary"
+            >
+              Change Tank
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setChangeOpen(false);
+                navigate('/select-farm');
+              }}
+              className="btn-secondary"
+            >
+              Change Farm
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -54,6 +155,43 @@ function OwnerNav() {
     { to: '/more', icon: MoreHorizontal, label: t('nav.more') },
   ];
   return <NavItems items={items} />;
+}
+
+function FarmHeaderSelect() {
+  const { t } = useTranslation();
+  const { selectedFarmId, setSelectedFarmId } = useAuth();
+
+  const { data: farms, isLoading } = useQuery({
+    queryKey: ['farms'],
+    queryFn: () => api.get<FarmDto[]>('/farms'),
+    staleTime: 60_000,
+  });
+
+  if (isLoading) {
+    return <p className="text-sm font-semibold text-white/90">{t('common.loading')}</p>;
+  }
+
+  if (!farms?.length) {
+    return <p className="text-sm font-semibold text-white/90">{t('farms.noFarms')}</p>;
+  }
+
+  return (
+    <div className="relative w-full max-w-[220px]">
+      <select
+        value={selectedFarmId ?? ''}
+        onChange={(e) => setSelectedFarmId(e.target.value)}
+        className="w-full appearance-none bg-white/15 border border-white/35 text-white font-semibold text-base rounded-lg pl-3 pr-9 py-2 truncate"
+        aria-label={t('farms.selectFarm')}
+      >
+        {farms.map((farm) => (
+          <option key={farm.id} value={farm.id} className="text-text-primary">
+            {farm.name}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={18} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-white/90" />
+    </div>
+  );
 }
 
 function NavItems({ items }: { items: Array<{ to: string; icon: React.ComponentType<{ size?: number | string }>; label: string }> }) {

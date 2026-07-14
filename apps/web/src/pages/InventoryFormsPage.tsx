@@ -53,7 +53,7 @@ export function ReceiveFeedPage() {
   };
 
   return (
-    <AppShell title={t('inventory.receive')} showNav={false}>
+    <AppShell title={t('inventory.receive')}>
       <div className="px-4 py-4 space-y-4">
         <div>
           <label className="label">Feed Product</label>
@@ -133,7 +133,7 @@ export function DamageFeedPage() {
   };
 
   return (
-    <AppShell title={t('inventory.damage')} showNav={false}>
+    <AppShell title={t('inventory.damage')}>
       <div className="px-4 py-4 space-y-4">
         <div>
           <label className="label">Feed Product</label>
@@ -219,7 +219,7 @@ export function FeedProductFormPage() {
   };
 
   return (
-    <AppShell title={isEdit ? t('inventory.editFeed') : t('inventory.addFeed')} showNav={false}>
+    <AppShell title={isEdit ? t('inventory.editFeed') : t('inventory.addFeed')}>
       <div className="px-4 py-4 space-y-4">
         {isLoading && isEdit ? (
           <p className="text-center py-8">{t('common.loading')}</p>

@@ -37,6 +37,16 @@ export const createUserSchema = z.object({
   role: z.nativeEnum(UserRole),
 });
 
+export const inviteSupervisorSchema = z.object({
+  farmId: z.string().min(1).max(100),
+  phoneNumber: z.string().regex(phoneRegex, 'Enter a valid 10-digit phone number'),
+  pin: z.string().regex(pinRegex, 'PIN must be 6 digits'),
+});
+
+export const setPinSchema = z.object({
+  newPin: z.string().regex(pinRegex, 'PIN must be 6 digits'),
+});
+
 export const feedingMealSchema = z.object({
   mealNumber: z.number().int().min(1).max(10),
   scheduledTime: z.string().optional(),
@@ -97,6 +107,16 @@ export const inventoryTransactionSchema = z.object({
   numberOfBags: z.number().int().positive().optional(),
 });
 
+const decimalKgNonNegative = z
+  .string()
+  .regex(/^\d+(\.\d{1,3})?$/, 'Enter a valid quantity in kg')
+  .refine((v) => parseFloat(v) >= 0, 'Quantity cannot be negative');
+
+export const setFarmInventoryTotalSchema = z.object({
+  farmId: entityId,
+  quantityKg: decimalKgNonNegative,
+});
+
 export const pondSchema = z.object({
   name: z.string().min(1).max(100),
   code: z.string().min(1).max(20),
@@ -104,6 +124,12 @@ export const pondSchema = z.object({
   area: z.string().optional(),
   areaUnit: z.string().optional(),
   capacity: z.string().optional(),
+});
+
+export const farmSchema = z.object({
+  name: z.string().min(1).max(100),
+  location: z.string().max(200).optional(),
+  timezone: z.string().max(50).optional(),
 });
 
 export const cultureCycleSchema = z.object({
@@ -162,4 +188,5 @@ export const approvalActionSchema = z.object({
 export type LoginInput = z.infer<typeof loginSchema>;
 export type FeedingEntryInput = z.infer<typeof feedingEntrySchema>;
 export type InventoryTransactionInput = z.infer<typeof inventoryTransactionSchema>;
+export type SetFarmInventoryTotalInput = z.infer<typeof setFarmInventoryTotalSchema>;
 export type SyncBatchInput = z.infer<typeof syncBatchSchema>;

@@ -1,8 +1,7 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { LogOut, CheckCircle, History, Settings, FileText } from 'lucide-react';
+import { LogOut, CheckCircle, History, Settings, FileText, UserPlus } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
@@ -13,6 +12,7 @@ export function MorePage() {
 
   const items = [
     { to: '/reports', icon: FileText, label: t('nav.reports') },
+    { to: '/invite-supervisor', icon: UserPlus, label: t('inviteSupervisor.title', 'Invite Supervisor') },
     { to: '/approvals', icon: CheckCircle, label: t('approvals.title') },
     { to: '/audit', icon: History, label: 'Audit History' },
     { to: '/settings', icon: Settings, label: 'Farm Settings' },
@@ -105,50 +105,16 @@ export function SettingsPage() {
 
 export function ResetPinPage() {
   const { t } = useTranslation();
-  const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState('');
-  const [newPin, setNewPin] = useState('');
-  const [step, setStep] = useState<'phone' | 'reset'>('phone');
-  const [message, setMessage] = useState('');
-
-  const requestOtp = async () => {
-    await api.post('/auth/request-otp', { phoneNumber: phone });
-    setMessage('OTP sent (check console in dev mode)');
-    setStep('reset');
-  };
-
-  const reset = async () => {
-    await api.post('/auth/reset-pin', { phoneNumber: phone, otp, newPin });
-    setMessage('PIN reset successfully. Please login.');
-  };
 
   return (
     <div className="min-h-dvh px-6 py-8 max-w-md mx-auto">
       <h1 className="text-xl font-bold mb-6">{t('login.forgotPin')}</h1>
-      {step === 'phone' ? (
-        <div className="space-y-4">
-          <input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            className="input-field"
-            placeholder="Phone number"
-          />
-          <button onClick={requestOtp} className="btn-primary">Send OTP</button>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <input value={otp} onChange={(e) => setOtp(e.target.value)} className="input-field" placeholder="OTP" />
-          <input
-            value={newPin}
-            onChange={(e) => setNewPin(e.target.value)}
-            className="input-field"
-            placeholder="New 6-digit PIN"
-            maxLength={6}
-          />
-          <button onClick={reset} className="btn-primary">Reset PIN</button>
-        </div>
-      )}
-      {message && <p className="mt-4 text-sm text-success">{message}</p>}
+      <div className="card text-sm text-text-secondary">
+        {t(
+          'login.forgotPinNoOtp',
+          'Forgot PIN? OTP reset is disabled. Please contact your owner to reset your PIN.',
+        )}
+      </div>
       <a href="/login" className="block mt-4 text-primary text-sm">Back to login</a>
     </div>
   );

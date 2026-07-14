@@ -100,14 +100,14 @@ async function main() {
 
   const farm = await prisma.farm.upsert({
     where: { id: 'demo-farm-001' },
-    update: {},
+    update: { status: 'INACTIVE' },
     create: {
       id: 'demo-farm-001',
       organizationId: org.id,
       name: 'Village Shrimp Farm',
       location: 'Andhra Pradesh, India',
       timezone: 'Asia/Kolkata',
-      status: 'ACTIVE',
+      status: 'INACTIVE',
     },
   });
 
@@ -168,20 +168,29 @@ async function main() {
     cycles.push(cycle);
   }
 
+  const defaultFeedCodes = [
+    { code: '1C', pelletSize: '1.2mm', lowStock: 100, openingKg: 500 },
+    { code: '2C', pelletSize: '1.5mm', lowStock: 100, openingKg: 500 },
+    { code: '20', pelletSize: '2.0mm', lowStock: 100, openingKg: 500 },
+    { code: '3S', pelletSize: '2.0mm', lowStock: 100, openingKg: 500 },
+    { code: '3SP', pelletSize: '2.0mm', lowStock: 100, openingKg: 500 },
+    { code: '3P', pelletSize: '2.0mm', lowStock: 200, openingKg: 150 },
+  ];
+
   const feedProducts = [];
-  for (const code of ['1C', '2C', '3C']) {
+  for (const feed of defaultFeedCodes) {
     const fp = await prisma.feedProduct.upsert({
-      where: { farmId_feedCode: { farmId: farm.id, feedCode: code } },
+      where: { farmId_feedCode: { farmId: farm.id, feedCode: feed.code } },
       update: {},
       create: {
         organizationId: org.id,
         farmId: farm.id,
-        brandName: `Demo Feed ${code}`,
-        feedCode: code,
-        pelletSize: code === '1C' ? '1.2mm' : code === '2C' ? '1.5mm' : '2.0mm',
+        brandName: `Demo Feed ${feed.code}`,
+        feedCode: feed.code,
+        pelletSize: feed.pelletSize,
         bagWeightKg: 25,
         supplierName: 'Demo Supplier',
-        lowStockThresholdKg: code === '3C' ? 200 : 100,
+        lowStockThresholdKg: feed.lowStock,
         status: 'ACTIVE',
       },
     });
@@ -199,7 +208,7 @@ async function main() {
         feedProductId: fp.id,
         type: 'OPENING_BALANCE',
         direction: 'IN',
-        quantityKg: fp.feedCode === '3C' ? 150 : 500,
+        quantityKg: defaultFeedCodes.find((f) => f.code === fp.feedCode)?.openingKg ?? 500,
         transactionDate: new Date(stockingDate),
         remarks: 'Opening balance',
         createdByUserId: owner.id,

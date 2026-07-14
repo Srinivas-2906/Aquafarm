@@ -17,6 +17,7 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   if (!isLoading && user) {
+    if (user.mustChangePin) return <Navigate to="/set-pin" replace />;
     return <Navigate to={user.role === 'OWNER' ? '/dashboard' : '/'} replace />;
   }
 
@@ -112,10 +113,8 @@ export function LoginPage() {
           </button>
         </form>
 
-        <p className="text-center mt-4">
-          <a href="/reset-pin" className="text-primary text-sm font-medium">
-            {t('login.forgotPin')}
-          </a>
+        <p className="text-center mt-4 text-sm text-text-secondary">
+          {t('login.forgotPinNoOtp', 'Forgot PIN? Contact your owner to reset it.')}
         </p>
       </div>
     </div>
