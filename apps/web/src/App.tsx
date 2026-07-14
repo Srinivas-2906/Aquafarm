@@ -74,7 +74,7 @@ export function App() {
               element={<ProtectedRoute requiresFarm={false}><FarmSelectPage /></ProtectedRoute>}
             />
             <Route path="/" element={<ProtectedRoute><HomeRedirect /></ProtectedRoute>} />
-            <Route path="/dashboard" element={<ProtectedRoute ownerOnly><OwnerDashboardPage /></ProtectedRoute>} />
+            <Route path="/dashboard" element={<ProtectedRoute><OwnerDashboardPage /></ProtectedRoute>} />
             <Route path="/feeding" element={<ProtectedRoute><Navigate to="/feeding/entry" /></ProtectedRoute>} />
             <Route path="/feeding/entry" element={<ProtectedRoute><FeedingEntryPage /></ProtectedRoute>} />
             <Route path="/feeding/entry/:entryId" element={<ProtectedRoute><FeedingEntryPage /></ProtectedRoute>} />
@@ -86,9 +86,9 @@ export function App() {
             <Route path="/inventory/feeds/:feedProductId/edit" element={<ProtectedRoute ownerOnly><FeedProductFormPage /></ProtectedRoute>} />
             <Route path="/approvals" element={<ProtectedRoute ownerOnly><ApprovalsPage /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute ownerOnly><ReportsPage /></ProtectedRoute>} />
-            <Route path="/net" element={<ProtectedRoute ownerOnly><NetPage /></ProtectedRoute>} />
+            <Route path="/net" element={<ProtectedRoute><NetPage /></ProtectedRoute>} />
             <Route path="/invite-supervisor" element={<ProtectedRoute ownerOnly><InviteSupervisorPage /></ProtectedRoute>} />
-            <Route path="/more" element={<ProtectedRoute ownerOnly><MorePage /></ProtectedRoute>} />
+            <Route path="/more" element={<ProtectedRoute><MorePage /></ProtectedRoute>} />
             <Route path="/audit" element={<ProtectedRoute ownerOnly><AuditPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute ownerOnly><SettingsPage /></ProtectedRoute>} />
           </Routes>

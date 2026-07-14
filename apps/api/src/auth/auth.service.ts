@@ -18,6 +18,38 @@ export class AuthService {
     private otp: OtpService,
   ) {}
 
+  private async syncSupervisorFarmAccess(userId: string, organizationId: string) {
+    const orgFarms = (await this.prisma.farm.findMany({
+      where: { organizationId, status: 'ACTIVE' },
+      select: { id: true, status: true },
+    })).filter(isSelectableFarm);
+
+    const farmIds = orgFarms.map((f) => f.id);
+    if (farmIds.length === 0) return;
+
+    await this.prisma.$transaction(async (tx) => {
+      await Promise.all(
+        farmIds.map((farmId) =>
+          tx.farmUser.upsert({
+            where: { farmId_userId: { farmId, userId } },
+            update: { role: 'SUPERVISOR', status: 'ACTIVE' },
+            create: { farmId, userId, role: 'SUPERVISOR', status: 'ACTIVE' },
+          }),
+        ),
+      );
+
+      // If supervisor had access to farms outside the org active farms, deactivate so lists stay consistent.
+      await tx.farmUser.updateMany({
+        where: {
+          userId,
+          status: 'ACTIVE',
+          farmId: { notIn: farmIds },
+        },
+        data: { status: 'INACTIVE' },
+      });
+    });
+  }
+
   async inviteSupervisor(
     data: { farmId: string; phoneNumber: string; pin: string },
     owner: { userId: string; organizationId: string },
@@ -27,22 +59,16 @@ export class AuthService {
       throw new BadRequestException(parsed.error.errors[0]?.message || 'Invalid invite');
     }
 
-    const farmAccess = await this.prisma.farmUser.findFirst({
-      where: {
-        farmId: parsed.data.farmId,
-        userId: owner.userId,
-        role: 'OWNER',
-        status: 'ACTIVE',
-      },
-    });
-    if (!farmAccess) {
+    // Keep supervisor farms aligned with the organization's farms (same farms owner sees).
+    // We validate the selected farmId belongs to this organization and is selectable.
+    const orgFarms = (await this.prisma.farm.findMany({
+      where: { organizationId: owner.organizationId, status: 'ACTIVE' },
+    })).filter(isSelectableFarm);
+
+    const orgFarmIds = new Set(orgFarms.map((f) => f.id));
+    if (!orgFarmIds.has(parsed.data.farmId)) {
       throw new ForbiddenException('Not allowed to invite for this farm');
     }
-
-    const farm = await this.prisma.farm.findFirst({
-      where: { id: parsed.data.farmId, organizationId: owner.organizationId, status: 'ACTIVE' },
-    });
-    if (!farm) throw new BadRequestException('Farm not found');
 
     const pinHash = await bcrypt.hash(parsed.data.pin, 12);
     const existing = await this.prisma.user.findFirst({
@@ -59,9 +85,9 @@ export class AuthService {
       throw new BadRequestException('Cannot invite an owner account with this phone number');
     }
 
-    const user =
-      existing
-        ? await this.prisma.user.update({
+    const user = await this.prisma.$transaction(async (tx) => {
+      const u = existing
+        ? await tx.user.update({
             where: { id: existing.id },
             data: {
               pinHash,
@@ -71,14 +97,8 @@ export class AuthService {
               loginAttempts: 0,
               lockedUntil: null,
             },
-            include: {
-              farmUsers: {
-                where: { status: 'ACTIVE' },
-                include: { farm: true },
-              },
-            },
           })
-        : await this.prisma.user.create({
+        : await tx.user.create({
             data: {
               organizationId: owner.organizationId,
               phoneNumber: parsed.data.phoneNumber,
@@ -88,18 +108,31 @@ export class AuthService {
               mustChangePin: true,
               status: 'ACTIVE',
             },
-            include: {
-              farmUsers: {
-                where: { status: 'ACTIVE' },
-                include: { farm: true },
-              },
-            },
           });
 
-    await this.prisma.farmUser.upsert({
-      where: { farmId_userId: { farmId: parsed.data.farmId, userId: user.id } },
-      update: { role: 'SUPERVISOR', status: 'ACTIVE' },
-      create: { farmId: parsed.data.farmId, userId: user.id, role: 'SUPERVISOR', status: 'ACTIVE' },
+      // Ensure supervisor has access to the same farms the owner can see.
+      const farmIds = [...orgFarmIds];
+      await Promise.all(
+        farmIds.map((farmId) =>
+          tx.farmUser.upsert({
+            where: { farmId_userId: { farmId, userId: u.id } },
+            update: { role: 'SUPERVISOR', status: 'ACTIVE' },
+            create: { farmId, userId: u.id, role: 'SUPERVISOR', status: 'ACTIVE' },
+          }),
+        ),
+      );
+
+      // If supervisor had access to farms the owner doesn't, deactivate them so lists match.
+      await tx.farmUser.updateMany({
+        where: {
+          userId: u.id,
+          status: 'ACTIVE',
+          farmId: { notIn: farmIds },
+        },
+        data: { status: 'INACTIVE' },
+      });
+
+      return u;
     });
 
     // Re-fetch with farmUsers to ensure consistent response
@@ -182,11 +215,29 @@ export class AuthService {
       data: { loginAttempts: 0, lockedUntil: null, lastLoginAt: new Date() },
     });
 
+    if (user.role === 'SUPERVISOR') {
+      await this.syncSupervisorFarmAccess(user.id, user.organizationId);
+    }
+
+    const refreshed = user.role === 'SUPERVISOR'
+      ? await this.prisma.user.findUnique({
+          where: { id: user.id },
+          include: {
+            farmUsers: {
+              where: { status: 'ACTIVE' },
+              include: { farm: true },
+            },
+          },
+        })
+      : user;
+
+    if (!refreshed) throw new UnauthorizedException();
+
     const tokens = await this.createTokens(user.id, user.organizationId, user.role, user.phoneNumber);
     await this.createSession(user.id, tokens.refreshToken, userAgent, ipAddress);
 
     return {
-      user: this.mapUser(user),
+      user: this.mapUser(refreshed),
       ...tokens,
     };
   }

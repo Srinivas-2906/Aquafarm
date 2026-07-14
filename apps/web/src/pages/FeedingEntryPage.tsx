@@ -620,7 +620,7 @@ export function FeedingEntryPage() {
           )}
         </div>
 
-        <div className="sticky bottom-20 z-10 bg-background pt-2 pb-3 space-y-1.5 -mx-4 px-4 border-t border-border/60">
+        <div className="sticky bottom-0 z-10 bg-background pt-2 pb-3 space-y-1.5 -mx-4 px-4 border-t border-border/60">
           {saveError && <p className="text-danger text-xs">{saveError}</p>}
           {saveOk && <p className="text-success text-xs font-medium">{t('feeding.saved')}</p>}
 

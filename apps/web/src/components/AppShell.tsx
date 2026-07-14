@@ -1,10 +1,9 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Home, Utensils, Package, LayoutDashboard, MoreHorizontal, Calculator, FileText, X, ArrowLeft, ChevronDown } from 'lucide-react';
+import { Utensils, Package, LayoutDashboard, MoreHorizontal, Calculator, X, ArrowLeft, ChevronDown } from 'lucide-react';
 import { ConnectivityBanner } from '@/hooks/useOnline';
 import { useAuth } from '@/contexts/AuthContext';
-import { UserRole } from '@/types/roles';
 import { api } from '@/lib/api';
 import type { FarmDto } from '@aqualedger/contracts';
 import { useState } from 'react';
@@ -19,7 +18,6 @@ interface AppShellProps {
 
 export function AppShell({ children, title, showNav = true, onBack, farmSelector = false }: AppShellProps) {
   const { user, selectedFarmId } = useAuth();
-  const isOwner = user?.role === UserRole.OWNER;
   const navigate = useNavigate();
   const [changeOpen, setChangeOpen] = useState(false);
 
@@ -33,10 +31,10 @@ export function AppShell({ children, title, showNav = true, onBack, farmSelector
   const showHeader = !!title || farmSelector;
 
   return (
-    <div className="min-h-dvh flex flex-col bg-background">
+    <div className="h-dvh flex flex-col bg-background overflow-hidden">
       <ConnectivityBanner />
       {showHeader && (
-        <header className="bg-primary text-white px-4 py-3 sticky top-0 z-10 shadow-sm">
+        <header className="shrink-0 bg-primary text-white px-4 py-3 z-10 shadow-sm">
           {farmSelector ? (
             <div className="flex items-center gap-2">
               <div className="min-w-touch shrink-0">
@@ -89,10 +87,10 @@ export function AppShell({ children, title, showNav = true, onBack, farmSelector
           )}
         </header>
       )}
-      <main className="flex-1 pb-20 overflow-y-auto">{children}</main>
+      <main className="flex-1 min-h-0 overflow-y-auto">{children}</main>
       {showNav && user && (
-        <nav className="fixed bottom-0 left-0 right-0 bg-surface border-t border-border z-20 no-print">
-          {isOwner ? <OwnerNav /> : <SupervisorNav />}
+        <nav className="shrink-0 bg-surface border-t border-border z-30 no-print pb-[env(safe-area-inset-bottom)]">
+          <MainNav />
         </nav>
       )}
 
@@ -134,18 +132,7 @@ export function AppShell({ children, title, showNav = true, onBack, farmSelector
   );
 }
 
-function SupervisorNav() {
-  const { t } = useTranslation();
-  const items = [
-    { to: '/', icon: Home, label: t('nav.home') },
-    { to: '/feeding', icon: Utensils, label: t('nav.feeding') },
-    { to: '/inventory', icon: Package, label: t('nav.inventory') },
-    { to: '/records', icon: FileText, label: t('nav.records') },
-  ];
-  return <NavItems items={items} />;
-}
-
-function OwnerNav() {
+function MainNav() {
   const { t } = useTranslation();
   const items = [
     { to: '/dashboard', icon: LayoutDashboard, label: t('nav.dashboard') },
@@ -159,10 +146,10 @@ function OwnerNav() {
 
 function FarmHeaderSelect() {
   const { t } = useTranslation();
-  const { selectedFarmId, setSelectedFarmId } = useAuth();
+  const { user, selectedFarmId, setSelectedFarmId } = useAuth();
 
   const { data: farms, isLoading } = useQuery({
-    queryKey: ['farms'],
+    queryKey: ['farms', user?.id],
     queryFn: () => api.get<FarmDto[]>('/farms'),
     staleTime: 60_000,
   });
@@ -201,7 +188,7 @@ function NavItems({ items }: { items: Array<{ to: string; icon: React.ComponentT
         <Link
           key={to}
           to={to}
-          className="flex flex-col items-center justify-center py-2 px-3 min-h-touch min-w-touch text-text-secondary hover:text-primary active:text-primary"
+          className="relative z-10 flex flex-col items-center justify-center py-2 px-3 min-h-touch min-w-touch text-text-secondary hover:text-primary active:text-primary touch-manipulation"
         >
           <Icon size={22} />
           <span className="text-xs mt-0.5 font-medium">{label}</span>
