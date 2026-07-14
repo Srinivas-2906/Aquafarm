@@ -129,6 +129,7 @@ async function main() {
     }
   }
 
+  try {
   const farm = await prisma.farm.upsert({
     where: { id: 'demo-farm-001' },
     update: { status: 'INACTIVE' },
@@ -394,6 +395,11 @@ async function main() {
         },
       },
     });
+  }
+
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Demo sample data skipped: ${message}`);
   }
 
   console.log('Seed complete!');

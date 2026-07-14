@@ -156,14 +156,23 @@ if ! gcloud compute url-maps describe "$URL_MAP" --format=yaml | grep -q "${DOMA
 fi
 
 echo "==> Seeding database (one-time, safe to re-run)"
-gcloud run jobs describe aquafarm-seed --region "$REGION" >/dev/null 2>&1 || \
-gcloud run jobs create aquafarm-seed \
-  --image "$API_IMAGE" \
-  --region "$REGION" \
-  --add-cloudsql-instances "${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
-  --set-secrets "DATABASE_URL=aquafarm_database_url:latest" \
-  --command "tsx" \
-  --args "apps/api/prisma/seed.ts" || true
+if gcloud run jobs describe aquafarm-seed --region "$REGION" >/dev/null 2>&1; then
+  gcloud run jobs update aquafarm-seed \
+    --image "$API_IMAGE" \
+    --region "$REGION" \
+    --add-cloudsql-instances "${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
+    --set-secrets "DATABASE_URL=aquafarm_database_url:latest" \
+    --command "tsx" \
+    --args "apps/api/prisma/seed.ts" || true
+else
+  gcloud run jobs create aquafarm-seed \
+    --image "$API_IMAGE" \
+    --region "$REGION" \
+    --add-cloudsql-instances "${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
+    --set-secrets "DATABASE_URL=aquafarm_database_url:latest" \
+    --command "tsx" \
+    --args "apps/api/prisma/seed.ts" || true
+fi
 
 gcloud run jobs execute aquafarm-seed --region "$REGION" --wait || echo "Seed job skipped/failed (may already be seeded)"
 
