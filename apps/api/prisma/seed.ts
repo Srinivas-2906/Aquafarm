@@ -31,6 +31,11 @@ async function main() {
     {
       phoneNumber: '9008747926',
       legacyPhoneNumber: '9876543211',
+      displayName: 'Demo Owner 2',
+      role: 'OWNER' as const,
+    },
+    {
+      phoneNumber: '9111111111',
       displayName: 'Demo Supervisor',
       role: 'SUPERVISOR' as const,
     },
@@ -38,14 +43,16 @@ async function main() {
 
   const ensuredUsers = [];
   for (const demoUser of demoUsers) {
-    const legacy = await prisma.user.findUnique({
-      where: {
-        organizationId_phoneNumber: {
-          organizationId: org.id,
-          phoneNumber: demoUser.legacyPhoneNumber,
-        },
-      },
-    });
+    const legacy = demoUser.legacyPhoneNumber
+      ? await prisma.user.findUnique({
+          where: {
+            organizationId_phoneNumber: {
+              organizationId: org.id,
+              phoneNumber: demoUser.legacyPhoneNumber,
+            },
+          },
+        })
+      : null;
 
     if (legacy) {
       ensuredUsers.push(
@@ -92,10 +99,34 @@ async function main() {
     );
   }
 
-  const owner = ensuredUsers.find((user) => user.role === 'OWNER');
+  const owner = ensuredUsers.find((user) => user.phoneNumber === '9985533376');
   const supervisor = ensuredUsers.find((user) => user.role === 'SUPERVISOR');
   if (!owner || !supervisor) {
     throw new Error('Failed to seed demo owner and supervisor users');
+  }
+
+  // Grant all demo users access to every active farm in the org (Farm1, Farm2, etc.).
+  const activeFarms = await prisma.farm.findMany({
+    where: {
+      organizationId: org.id,
+      status: 'ACTIVE',
+      id: { not: 'demo-farm-001' },
+    },
+  });
+
+  for (const farmRecord of activeFarms) {
+    for (const demoUser of ensuredUsers) {
+      await prisma.farmUser.upsert({
+        where: { farmId_userId: { farmId: farmRecord.id, userId: demoUser.id } },
+        update: { role: demoUser.role, status: 'ACTIVE' },
+        create: {
+          farmId: farmRecord.id,
+          userId: demoUser.id,
+          role: demoUser.role,
+          status: 'ACTIVE',
+        },
+      });
+    }
   }
 
   const farm = await prisma.farm.upsert({
@@ -273,6 +304,11 @@ async function main() {
       });
       if (existing) continue;
 
+      const existingByDate = await prisma.feedingEntry.findUnique({
+        where: { pondId_feedingDate: { pondId: pond.id, feedingDate } },
+      });
+      if (existingByDate) continue;
+
       const qty1 = baseQty + p * 0.2;
       const qty2 = baseQty + p * 0.2;
       const qty3 = baseQty + 1 + p * 0.3;
@@ -363,8 +399,9 @@ async function main() {
   console.log('Seed complete!');
   console.log('');
   console.log('=== DEVELOPMENT CREDENTIALS (DO NOT USE IN PRODUCTION) ===');
-  console.log('Owner:      Phone 9985533376  PIN 123456');
-  console.log('Supervisor: Phone 9008747926  PIN 123456');
+  console.log('Owner 1:    Phone 9985533376  PIN 123456');
+  console.log('Owner 2:    Phone 9008747926  PIN 123456');
+  console.log('Supervisor: Phone 9111111111  PIN 123456');
   console.log('OTP Mock:   123456');
   console.log('Farm ID:    demo-farm-001');
 }

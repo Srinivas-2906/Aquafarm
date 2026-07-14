@@ -96,8 +96,9 @@ Open http://localhost:5173
 
 | Role | Phone | PIN |
 |------|-------|-----|
-| Owner | 9985533376 | 123456 |
-| Supervisor | 9008747926 | 123456 |
+| Owner 1 | 9985533376 | 123456 |
+| Owner 2 | 9008747926 | 123456 |
+| Supervisor | 9111111111 | 123456 |
 
 - OTP mock code: `123456` (logged to API console)
 - Demo farm ID: `demo-farm-001`
