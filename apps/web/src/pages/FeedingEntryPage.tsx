@@ -366,7 +366,6 @@ export function FeedingEntryPage() {
       } else {
         await api.post(`/feeding-entries/${entry.id}/meals`, {
           mealNumber: row.mealNumber,
-          feedProductId: row.feedProductId || resolvedFeedProductId,
           ...payload,
         });
       }
