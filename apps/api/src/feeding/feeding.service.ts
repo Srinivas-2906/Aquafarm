@@ -177,6 +177,7 @@ export class FeedingService {
             scheduledTime: m.scheduledTime,
             actualTime: m.actualTime || new Date().toTimeString().slice(0, 5),
             feedQuantityKg: m.feedQuantityKg,
+            feedProductId: m.feedProductId ?? data.feedProductId,
             checkTrayRemainingPercentage: m.checkTrayRemainingPercentage,
             appetiteStatus: m.appetiteStatus,
             remarks: m.remarks,
@@ -184,7 +185,7 @@ export class FeedingService {
         },
       },
       include: {
-        meals: true,
+        meals: { orderBy: { mealNumber: 'asc' }, include: { feedProduct: true } },
         pond: true,
         feedProduct: true,
         enteredBy: true,
@@ -203,18 +204,7 @@ export class FeedingService {
     });
 
     if (status === 'CONFIRMED') {
-      const tdf = sumDecimals(data.meals.map((m) => m.feedQuantityKg));
-      await this.inventory.createFeedConsumed({
-        farmId: data.farmId,
-        organizationId,
-        feedProductId: data.feedProductId,
-        pondId: data.pondId,
-        feedingEntryId: entry.id,
-        quantityKg: tdf,
-        transactionDate: data.feedingDate,
-        userId,
-        clientTransactionId: uuidv4(),
-      });
+      await this.resyncFeedConsumed(entry, userId);
     }
 
     return this.mapEntry(entry, userRole, farm.timezone);
@@ -225,6 +215,7 @@ export class FeedingService {
     meal: {
       mealNumber: number;
       feedQuantityKg: string;
+      feedProductId?: string;
       actualTime?: string;
       checkTrayRemainingPercentage?: string;
       appetiteStatus?: string;
@@ -254,6 +245,7 @@ export class FeedingService {
         feedingEntryId: entryId,
         mealNumber: meal.mealNumber,
         feedQuantityKg: meal.feedQuantityKg,
+        feedProductId: meal.feedProductId ?? entry.feedProductId,
         actualTime: meal.actualTime || new Date().toTimeString().slice(0, 5),
         checkTrayRemainingPercentage: meal.checkTrayRemainingPercentage as never,
         appetiteStatus: meal.appetiteStatus as never,
@@ -264,26 +256,17 @@ export class FeedingService {
     const updated = await this.prisma.feedingEntry.update({
       where: { id: entryId },
       data: { version: { increment: 1 } },
-      include: { meals: true, pond: true, feedProduct: true, enteredBy: true, farm: true },
+      include: {
+        meals: { orderBy: { mealNumber: 'asc' }, include: { feedProduct: true } },
+        pond: true,
+        feedProduct: true,
+        enteredBy: true,
+        farm: true,
+      },
     });
 
     if (entry.status === 'CONFIRMED') {
-      const oldTdf = sumDecimals(entry.meals.map((m) => m.feedQuantityKg));
-      const newTdf = sumDecimals(updated.meals.map((m) => m.feedQuantityKg));
-      const diff = parseFloat(newTdf) - parseFloat(oldTdf);
-      if (diff > 0) {
-        await this.inventory.createFeedConsumed({
-          farmId: entry.farmId,
-          organizationId: entry.organizationId,
-          feedProductId: entry.feedProductId,
-          pondId: entry.pondId,
-          feedingEntryId: entry.id,
-          quantityKg: diff.toFixed(3),
-          transactionDate: entry.feedingDate.toISOString().split('T')[0],
-          userId,
-          clientTransactionId: uuidv4(),
-        });
-      }
+      await this.resyncFeedConsumed(updated, userId);
     }
 
     await this.audit.log({
@@ -338,6 +321,7 @@ export class FeedingService {
       where: { id: mealId },
       data: {
         feedQuantityKg: parsed.data.feedQuantityKg,
+        feedProductId: parsed.data.feedProductId,
         actualTime: parsed.data.actualTime,
         checkTrayRemainingPercentage: parsed.data.checkTrayRemainingPercentage as never,
         appetiteStatus: parsed.data.appetiteStatus as never,
@@ -348,7 +332,13 @@ export class FeedingService {
     const updated = await this.prisma.feedingEntry.update({
       where: { id: entryId },
       data: { version: { increment: 1 } },
-      include: { meals: true, pond: true, feedProduct: true, enteredBy: true, farm: true },
+      include: {
+        meals: { orderBy: { mealNumber: 'asc' }, include: { feedProduct: true } },
+        pond: true,
+        feedProduct: true,
+        enteredBy: true,
+        farm: true,
+      },
     });
 
     await this.resyncFeedConsumed(updated, userId);
@@ -376,30 +366,32 @@ export class FeedingService {
       pondId: string;
       feedingDate: Date;
       status: FeedingEntryStatus;
-      meals: Array<{ feedQuantityKg: { toString(): string } }>;
+      meals: Array<{ feedProductId: string | null; feedQuantityKg: { toString(): string } }>;
     },
     userId: string,
   ) {
     if (entry.status !== 'CONFIRMED') return;
 
-    const confirmed = await this.prisma.inventoryTransaction.findMany({
-      where: { feedingEntryId: entry.id, type: 'FEED_CONSUMED', status: 'CONFIRMED' },
-    });
+    await this.inventory.reverseFeedConsumed(entry.id, userId, 'Feeding correction');
 
-    for (const _ of confirmed) {
-      await this.inventory.reverseFeedConsumed(entry.id, userId, 'Feeding correction');
+    const byProduct = new Map<string, number>();
+    for (const meal of entry.meals) {
+      const productId = meal.feedProductId ?? entry.feedProductId;
+      const qty = parseFloat(meal.feedQuantityKg.toString());
+      if (qty <= 0) continue;
+      byProduct.set(productId, (byProduct.get(productId) ?? 0) + qty);
     }
 
-    const totalTdf = sumDecimals(entry.meals.map((m) => m.feedQuantityKg));
-    if (parseFloat(totalTdf) > 0) {
+    const txDate = entry.feedingDate.toISOString().split('T')[0];
+    for (const [feedProductId, qty] of byProduct) {
       await this.inventory.createFeedConsumed({
         farmId: entry.farmId,
         organizationId: entry.organizationId,
-        feedProductId: entry.feedProductId,
+        feedProductId,
         pondId: entry.pondId,
         feedingEntryId: entry.id,
-        quantityKg: totalTdf,
-        transactionDate: entry.feedingDate.toISOString().split('T')[0],
+        quantityKg: qty.toFixed(3),
+        transactionDate: txDate,
         userId,
         clientTransactionId: uuidv4(),
       });
@@ -432,7 +424,7 @@ export class FeedingService {
       this.prisma.feedingEntry.findMany({
         where,
         include: {
-          meals: { orderBy: { mealNumber: 'asc' } },
+          meals: { orderBy: { mealNumber: 'asc' }, include: { feedProduct: true } },
           pond: true,
           feedProduct: true,
           enteredBy: true,
@@ -645,9 +637,11 @@ export class FeedingService {
         scheduledTime: string | null;
         actualTime: string | null;
         feedQuantityKg: { toString(): string };
+        feedProductId: string | null;
         checkTrayRemainingPercentage: string | null;
         appetiteStatus: string | null;
         remarks: string | null;
+        feedProduct?: { feedCode: string } | null;
       }>;
       pond: { name: string };
       feedProduct: { feedCode: string };
@@ -686,6 +680,8 @@ export class FeedingService {
         scheduledTime: m.scheduledTime,
         actualTime: m.actualTime,
         feedQuantityKg: decimalToString(m.feedQuantityKg),
+        feedProductId: m.feedProductId,
+        feedCode: m.feedProduct?.feedCode ?? entry.feedProduct.feedCode,
         checkTrayRemainingPercentage: m.checkTrayRemainingPercentage as FeedingEntryDto['meals'][0]['checkTrayRemainingPercentage'],
         appetiteStatus: m.appetiteStatus as FeedingEntryDto['meals'][0]['appetiteStatus'],
         remarks: m.remarks,

@@ -18,6 +18,7 @@ export class ReportsService {
     farmId: string;
     pondId?: string;
     feedProductId?: string;
+    feedProductIds?: string[];
     dateFrom: string;
     dateTo: string;
     userId: string;
@@ -32,7 +33,17 @@ export class ReportsService {
       },
     };
     if (filters.pondId) where.pondId = filters.pondId;
-    if (filters.feedProductId) where.feedProductId = filters.feedProductId;
+    const feedIds = filters.feedProductIds?.length
+      ? filters.feedProductIds
+      : filters.feedProductId
+        ? [filters.feedProductId]
+        : [];
+    if (feedIds.length) {
+      where.OR = [
+        { feedProductId: { in: feedIds } },
+        { meals: { some: { feedProductId: { in: feedIds } } } },
+      ];
+    }
 
     const entries = await this.prisma.feedingEntry.findMany({
       where,
@@ -44,6 +55,12 @@ export class ReportsService {
       },
       orderBy: [{ feedingDate: 'asc' }, { pond: { code: 'asc' } }],
     });
+
+    const products = await this.prisma.feedProduct.findMany({
+      where: { farmId: filters.farmId, status: 'ACTIVE' },
+      select: { id: true, feedCode: true },
+    });
+    const codeById = new Map(products.map((p) => [p.id, p.feedCode]));
 
     const farm = await this.prisma.farm.findUnique({ where: { id: filters.farmId } });
     const pond = filters.pondId
@@ -58,6 +75,14 @@ export class ReportsService {
           e.feedingDate,
           ['CONFIRMED', 'PENDING_OWNER_APPROVAL'],
         );
+        const codes = new Set<string>();
+        codes.add(e.feedProduct.feedCode);
+        for (const m of e.meals) {
+          if (!m.feedProductId) continue;
+          const code = codeById.get(m.feedProductId);
+          if (code) codes.add(code);
+        }
+        const feedCode = codes.size <= 1 ? [...codes][0] : [...codes].sort().join(', ');
         const mealMap: Record<number, string> = {};
         e.meals.forEach((m) => {
           mealMap[m.mealNumber] = m.feedQuantityKg.toString();
@@ -65,7 +90,7 @@ export class ReportsService {
         return {
           date: e.feedingDate.toISOString().split('T')[0],
           doc: e.doc,
-          feedCode: e.feedProduct.feedCode,
+          feedCode,
           meal1: mealMap[1] || '',
           meal2: mealMap[2] || '',
           meal3: mealMap[3] || '',

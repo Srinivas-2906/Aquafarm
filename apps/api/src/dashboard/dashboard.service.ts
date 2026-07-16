@@ -11,10 +11,11 @@ export class DashboardService {
   ) {}
 
   async getOwnerDashboard(farmId: string, timezone: string) {
-    const [pondStatuses, farmTotal, totalFeedUsed] = await Promise.all([
+    const [pondStatuses, farmTotal, totalFeedUsed, feedStockByCode] = await Promise.all([
       this.feeding.getPondTodayStatuses(farmId, timezone),
       this.inventory.getFarmTotal(farmId),
       this.feeding.getFarmTotalFeedUsed(farmId),
+      this.inventory.getSummary(farmId),
     ]);
 
     const totalFeedToday = sumDecimals(
@@ -26,6 +27,7 @@ export class DashboardService {
       totalFeedTodayKg: totalFeedToday,
       totalFeedUsedKg: totalFeedUsed,
       currentFeedStockKg: farmTotal.totalStockKg,
+      feedStockByCode,
       pendingApprovals: 0,
       unsyncedRecords: 0,
       lowStockProducts: 0,

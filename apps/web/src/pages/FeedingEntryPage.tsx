@@ -3,9 +3,11 @@ import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuidv4 } from 'uuid';
-import { Plus, Pencil, ChevronDown, Minus } from 'lucide-react';
+import { Plus, Pencil, ChevronDown, Minus, BarChart3 } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { AddTankButton } from '@/components/AddTankButton';
+import { EditTankNameButton } from '@/components/EditTankNameButton';
+import { FeedCodeCheckboxDropdown } from '@/components/FeedCodeCheckboxDropdown';
 import { RecordLockNotice } from '@/components/RecordLockNotice';
 import { useAuth } from '@/contexts/AuthContext';
 import { UserRole } from '@/types/roles';
@@ -14,6 +16,7 @@ import { saveFeedingLocally } from '@/lib/sync';
 import {
   getTodayISO,
   formatQty,
+  formatShortDate,
   getDefaultMealTime,
   from24HourTime,
   to24HourTime,
@@ -37,19 +40,20 @@ type FeedRow = {
   key: string;
   mealId?: string;
   mealNumber: number;
+  feedProductId: string;
   quantity: string;
   quantityUnit: QuantityUnit;
   hour: string;
   ampm: 'AM' | 'PM';
 };
 
-function defaultRow(mealNumber = 1): FeedRow {
+function defaultRow(mealNumber = 1, feedProductId = ''): FeedRow {
   const { hour, ampm } = from24HourTime(getDefaultMealTime());
-  return { key: uuidv4(), mealNumber, quantity: '', quantityUnit: 'kg', hour, ampm };
+  return { key: uuidv4(), mealNumber, feedProductId, quantity: '', quantityUnit: 'kg', hour, ampm };
 }
 
 function rowsFromEntry(entry: FeedingEntryDto): FeedRow[] {
-  if (!entry.meals.length) return [defaultRow()];
+  if (!entry.meals.length) return [defaultRow(1, entry.feedProductId)];
   return entry.meals
     .sort((a, b) => a.mealNumber - b.mealNumber)
     .map((meal) => {
@@ -58,12 +62,20 @@ function rowsFromEntry(entry: FeedingEntryDto): FeedRow[] {
         key: meal.id,
         mealId: meal.id,
         mealNumber: meal.mealNumber,
+        feedProductId: meal.feedProductId || entry.feedProductId,
         quantity: meal.feedQuantityKg,
         quantityUnit: 'kg' as const,
         hour,
         ampm,
       };
     });
+}
+
+function codeIdsFromEntry(entry: FeedingEntryDto): string[] {
+  const ids = entry.meals
+    .map((meal) => meal.feedProductId || entry.feedProductId)
+    .filter(Boolean);
+  return [...new Set(ids)];
 }
 
 function readError(err: unknown, fallback: string): string {
@@ -96,6 +108,7 @@ export function FeedingEntryPage() {
   const [feedingDate, setFeedingDate] = useState(getTodayISO());
   const [feedProductId, setFeedProductId] = useState('');
   const [rows, setRows] = useState<FeedRow[]>([defaultRow()]);
+  const [selectedCodeIds, setSelectedCodeIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState(false);
@@ -125,6 +138,7 @@ export function FeedingEntryPage() {
       setSelectedPondId(entryById.pondId);
       setFeedingDate(entryById.feedingDate.split('T')[0]);
       setFeedProductId(entryById.feedProductId);
+      setSelectedCodeIds(codeIdsFromEntry(entryById));
       setRows(rowsFromEntry(entryById));
       setMode('view');
     }
@@ -142,7 +156,7 @@ export function FeedingEntryPage() {
     enabled: !!selectedFarmId,
   });
 
-  const { data: existingEntry, refetch: refetchEntry } = useQuery({
+  const { data: existingEntry, refetch: refetchEntry, isSuccess: entryLoaded } = useQuery({
     queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate],
     queryFn: () => fetchEntryForDate(selectedFarmId!, selectedPondId, feedingDate),
     enabled: !!selectedPondId && !!selectedFarmId && !entryId,
@@ -155,16 +169,27 @@ export function FeedingEntryPage() {
 
   useEffect(() => {
     if (entryId) return;
-    if (existingEntry) {
-      setRows(rowsFromEntry(existingEntry));
-      setFeedProductId(existingEntry.feedProductId);
-      setMode('view');
-      return;
-    }
-    setRows([defaultRow()]);
+    if (!selectedPondId || !selectedFarmId || !entryLoaded) return;
+    if (!existingEntry) return;
+
+    setRows(rowsFromEntry(existingEntry));
+    setFeedProductId(existingEntry.feedProductId);
+    setSelectedCodeIds(codeIdsFromEntry(existingEntry));
+    setMode('view');
+  }, [existingEntry, entryId, entryLoaded, selectedPondId, selectedFarmId, feedingDate]);
+
+  useEffect(() => {
+    if (entryId) return;
+    if (!selectedPondId || !selectedFarmId || !entryLoaded || existingEntry) return;
+    if (!sortedFeedProducts?.length) return;
+
+    const defaultId =
+      sortedFeedProducts.find((fp) => fp.feedCode === '1C')?.id || sortedFeedProducts[0].id;
+    setSelectedCodeIds(defaultId ? [defaultId] : []);
+    setRows([defaultRow(1, defaultId)]);
     setMode('add');
     setSaveOk(false);
-  }, [existingEntry, entryId, selectedPondId, feedingDate]);
+  }, [existingEntry, entryId, entryLoaded, selectedPondId, selectedFarmId, feedingDate, sortedFeedProducts]);
 
   useEffect(() => {
     if (!sortedFeedProducts?.length) return;
@@ -181,9 +206,17 @@ export function FeedingEntryPage() {
   const activeEntry = entryById || existingEntry;
   const resolvedFeedProductId =
     feedProductId || sortedFeedProducts?.find((fp) => fp.feedCode === '1C')?.id || sortedFeedProducts?.[0]?.id || '';
+  const activeCodeProducts = useMemo(
+    () => sortedFeedProducts?.filter((fp) => selectedCodeIds.includes(fp.id)) ?? [],
+    [sortedFeedProducts, selectedCodeIds],
+  );
   const canEditDate = isSupervisorEditableDate(feedingDate);
   const canEdit = isOwner || (activeEntry?.isEditable ?? canEditDate);
-  const hasSavedEntry = !!activeEntry && activeEntry.meals.length > 0;
+  const hasPersistedMeals =
+    rows.some((row) => row.mealId) ||
+    (activeEntry?.meals.length ?? 0) > 0 ||
+    parseFloat(activeEntry?.totalDailyFeedKg ?? '0') > 0;
+  const hasSavedEntry = hasPersistedMeals;
   const isFormActive = !hasSavedEntry || mode !== 'view';
   const feedCodeLabel =
     sortedFeedProducts?.find((fp) => fp.id === resolvedFeedProductId)?.feedCode ||
@@ -215,8 +248,19 @@ export function FeedingEntryPage() {
     setSaveOk(false);
   };
 
+  const openTankReport = () => {
+    navigate(`/reports?pondId=${selectedPondId}&from=feeding`);
+  };
+
+  const dayTotalLabel =
+    feedingDate === todayISO
+      ? t('feeding.todayTotal')
+      : t('feeding.dayTotal', { date: formatShortDate(feedingDate) });
+
   const startEditing = () => {
     setMode('edit');
+    const ids = [...new Set(rows.map((row) => row.feedProductId).filter(Boolean))];
+    if (ids.length) setSelectedCodeIds(ids);
     setSaveError(null);
     setSaveOk(false);
   };
@@ -227,12 +271,41 @@ export function FeedingEntryPage() {
     setSaveOk(false);
     if (activeEntry) {
       setFeedProductId(activeEntry.feedProductId);
+      setSelectedCodeIds(codeIdsFromEntry(activeEntry));
       setRows(rowsFromEntry(activeEntry));
     }
   };
 
   const updateRow = (key: string, patch: Partial<FeedRow>) => {
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+    setSaveError(null);
+    setSaveOk(false);
+  };
+
+  const toggleFeedCode = (productId: string, assignRowKey?: string) => {
+    setSelectedCodeIds((current) => {
+      if (current.includes(productId)) {
+        if (current.length === 1) return current;
+        const next = current.filter((id) => id !== productId);
+        setRows((rowsCurrent) =>
+          rowsCurrent.map((row) =>
+            row.feedProductId === productId
+              ? { ...row, feedProductId: next[0] || resolvedFeedProductId }
+              : row,
+          ),
+        );
+        return next;
+      }
+      const next = [...current, productId];
+      if (assignRowKey) {
+        setRows((rowsCurrent) =>
+          rowsCurrent.map((row) =>
+            row.key === assignRowKey ? { ...row, feedProductId: productId } : row,
+          ),
+        );
+      }
+      return next;
+    });
     setSaveError(null);
     setSaveOk(false);
   };
@@ -244,7 +317,8 @@ export function FeedingEntryPage() {
       setSaveOk(false);
     }
     const nextNumber = Math.max(0, ...rows.map((r) => r.mealNumber)) + 1;
-    setRows((current) => [...current, defaultRow(nextNumber)]);
+    const defaultProductId = activeCodeProducts[0]?.id || resolvedFeedProductId;
+    setRows((current) => [...current, defaultRow(nextNumber, defaultProductId)]);
   };
 
   const removeRow = (key: string) => {
@@ -256,7 +330,7 @@ export function FeedingEntryPage() {
       if (!hasSavedEntry && unsavedRows.length <= 1) return current;
 
       const next = current.filter((row) => row.key !== key);
-      return next.length ? next : [defaultRow()];
+      return next.length ? next : [defaultRow(1, activeCodeProducts[0]?.id || resolvedFeedProductId)];
     });
     setSaveError(null);
     setSaveOk(false);
@@ -284,6 +358,7 @@ export function FeedingEntryPage() {
       if (!qty) continue;
       const payload = {
         feedQuantityKg: qty,
+        feedProductId: row.feedProductId || resolvedFeedProductId,
         actualTime: to24HourTime(row.hour, '00', row.ampm),
       };
       if (row.mealId) {
@@ -291,6 +366,7 @@ export function FeedingEntryPage() {
       } else {
         await api.post(`/feeding-entries/${entry.id}/meals`, {
           mealNumber: row.mealNumber,
+          feedProductId: row.feedProductId || resolvedFeedProductId,
           ...payload,
         });
       }
@@ -325,15 +401,17 @@ export function FeedingEntryPage() {
         (await fetchEntryForDate(selectedFarmId, selectedPondId, feedingDate));
 
       if (!entry) {
+        const primaryFeedProductId = filled[0].feedProductId || resolvedFeedProductId;
         const body = {
           clientEntryId: uuidv4(),
           farmId: selectedFarmId,
           pondId: selectedPondId,
           cultureCycleId: pond.activeCycle!.id,
           feedingDate,
-          feedProductId: resolvedFeedProductId,
+          feedProductId: primaryFeedProductId,
           meals: filled.map((row) => ({
             mealNumber: row.mealNumber,
+            feedProductId: row.feedProductId || primaryFeedProductId,
             feedQuantityKg: row.quantity,
             actualTime: to24HourTime(row.hour, '00', row.ampm),
           })),
@@ -342,6 +420,7 @@ export function FeedingEntryPage() {
 
         try {
           entry = await api.post<FeedingEntryDto>('/feeding-entries', body);
+          queryClient.setQueryData(['feeding-entry-by-date', selectedPondId, feedingDate], entry);
         } catch (err) {
           if (err instanceof ApiError && err.statusCode === 409) {
             entry = await fetchEntryForDate(selectedFarmId, selectedPondId, feedingDate);
@@ -368,7 +447,9 @@ export function FeedingEntryPage() {
       const refreshed = await refetchEntry();
       const latest = refreshed.data || entry;
       if (latest) {
+        queryClient.setQueryData(['feeding-entry-by-date', selectedPondId, feedingDate], latest);
         setFeedProductId(latest.feedProductId);
+        setSelectedCodeIds(codeIdsFromEntry(latest));
         setRows(rowsFromEntry(latest));
       }
 
@@ -397,19 +478,26 @@ export function FeedingEntryPage() {
 
           <div className="grid grid-cols-2 gap-3">
             {ponds?.map((pond) => (
-              <button
+              <div
                 key={pond.id}
-                type="button"
-                onClick={() => handleTankPick(pond.id)}
-                className="card text-left min-h-[88px] border-2 border-primary/30 bg-primary-light/40"
+                className="relative card text-left min-h-[88px] border-2 border-primary/30 bg-primary-light/40"
               >
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="text-base font-bold text-primary">{pond.name}</h3>
-                  <span className="rounded-md bg-primary text-white text-xs font-bold px-2 py-0.5">
-                    #{pond.code}
-                  </span>
+                <button
+                  type="button"
+                  onClick={() => handleTankPick(pond.id)}
+                  className="w-full h-full p-4 text-left"
+                >
+                  <div className="flex items-start justify-between gap-2 pr-7">
+                    <h3 className="text-base font-bold text-primary">{pond.name}</h3>
+                    <span className="rounded-md bg-primary text-white text-xs font-bold px-2 py-0.5 shrink-0">
+                      #{pond.code}
+                    </span>
+                  </div>
+                </button>
+                <div className="absolute top-2 right-2 z-10">
+                  <EditTankNameButton pondId={pond.id} name={pond.name} code={pond.code} />
                 </div>
-              </button>
+              </div>
             ))}
           </div>
 
@@ -449,34 +537,50 @@ export function FeedingEntryPage() {
             className="input-compact !w-[118px] !py-1.5 !px-2 !text-xs shrink-0"
             aria-label={t('feeding.selectDate')}
           />
-          {canEdit && hasSavedEntry && mode === 'view' && (
+          {isOwner && (
             <button
               type="button"
-              onClick={startEditing}
-              className="btn-secondary btn-inline !text-xs !py-1.5 !px-2.5 !min-h-0 shrink-0 flex items-center gap-1"
+              onClick={openTankReport}
+              className="btn-secondary btn-inline !p-2 !min-h-0 !min-w-0 shrink-0 flex items-center justify-center"
+              aria-label={t('feeding.tankReport')}
+              title={t('feeding.tankReport')}
             >
-              <Pencil size={14} />
-              {t('common.edit')}
-            </button>
-          )}
-          {hasSavedEntry && mode !== 'view' && (
-            <button
-              type="button"
-              onClick={cancelEditing}
-              className="btn-secondary btn-inline !text-xs !py-1.5 !px-2.5 !min-h-0 shrink-0"
-            >
-              {t('common.cancel')}
+              <BarChart3 size={16} />
             </button>
           )}
         </div>
 
+        {hasSavedEntry && mode !== 'view' && (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={cancelEditing}
+              className="btn-secondary btn-inline !text-xs !py-1.5 !px-3 !min-h-0"
+            >
+              {t('common.cancel')}
+            </button>
+          </div>
+        )}
+
         {!canEdit && <RecordLockNotice />}
 
         <div className="space-y-2 pb-32">
-          <div className="grid grid-cols-[68px_1fr_minmax(0,1.05fr)] gap-2 px-0.5 text-[11px] font-medium text-text-secondary">
-            <span>{t('feeding.feedCode')}</span>
-            <span>{t('feeding.quantity')}</span>
-            <span>{t('feeding.time')}</span>
+          <div className="flex items-center gap-2 px-0.5">
+            <div className="grid flex-1 grid-cols-[68px_1fr_minmax(0,1.05fr)] gap-2 text-[11px] font-medium text-text-secondary">
+              <span>{t('feeding.feedCode')}</span>
+              <span>{t('feeding.quantity')}</span>
+              <span>{t('feeding.time')}</span>
+            </div>
+            {canEdit && hasSavedEntry && mode === 'view' && (
+              <button
+                type="button"
+                onClick={startEditing}
+                className="btn-secondary btn-inline !text-xs !py-1 !px-2 !min-h-0 flex items-center gap-1 shrink-0"
+              >
+                <Pencil size={13} />
+                {t('common.edit')}
+              </button>
+            )}
           </div>
 
           {rows.map((row, index) => {
@@ -485,16 +589,12 @@ export function FeedingEntryPage() {
             const isAddLockedRow = mode === 'add' && isSavedRow;
             const rowEditable = canEdit && !isViewMode && !isAddLockedRow;
             const showReadonly = isViewMode || isAddLockedRow;
-            const showFeedCodeSelect =
-              !showReadonly &&
-              (mode === 'edit'
-                ? index === 0
-                : !activeEntry
-                  ? index === 0
-                  : !row.mealId);
-
+            const rowFeedCode =
+              sortedFeedProducts?.find((fp) => fp.id === row.feedProductId)?.feedCode ||
+              activeEntry?.meals.find((m) => m.id === row.mealId)?.feedCode ||
+              feedCodeLabel;
+            const showFeedCodePicker = !showReadonly && !!sortedFeedProducts?.length;
             const canDeleteRow = rowEditable && !row.mealId && (hasSavedEntry || rows.filter((r) => !r.mealId).length > 1);
-
             const feedLabel = t('feeding.feedLabel', { number: index + 1 });
 
             return (
@@ -515,28 +615,25 @@ export function FeedingEntryPage() {
                 <div className="grid grid-cols-[68px_1fr_minmax(0,1.05fr)] gap-2 items-center">
                   {showReadonly ? (
                     <>
-                      <span className="text-sm font-semibold text-primary px-1">{feedCodeLabel}</span>
+                      <span className="text-sm font-semibold text-primary px-1">{rowFeedCode}</span>
                       <span className="text-sm font-semibold px-1">{formatQty(row.quantity)}</span>
                       <span className="text-sm font-semibold px-1">{row.hour} {row.ampm}</span>
                     </>
                   ) : (
                     <>
-                      {showFeedCodeSelect ? (
-                        <select
-                          value={resolvedFeedProductId}
-                          onChange={(e) => setFeedProductId(e.target.value)}
-                          disabled={!sortedFeedProducts?.length || (mode === 'add' && isSavedRow)}
-                          className="input-compact w-full !py-2 !px-1.5 !text-sm font-semibold"
-                        >
-                          {!sortedFeedProducts?.length && <option value="">{t('common.loading')}</option>}
-                          {sortedFeedProducts?.map((fp) => (
-                            <option key={fp.id} value={fp.id}>
-                              {fp.feedCode}
-                            </option>
-                          ))}
-                        </select>
+                      {showFeedCodePicker ? (
+                        <FeedCodeCheckboxDropdown
+                          products={sortedFeedProducts!}
+                          selectedCodeIds={selectedCodeIds}
+                          rowProductId={row.feedProductId || resolvedFeedProductId}
+                          disabled={!rowEditable}
+                          onToggleCode={(productId, assignRow) =>
+                            toggleFeedCode(productId, assignRow ? row.key : undefined)
+                          }
+                          onAssignRow={(productId) => updateRow(row.key, { feedProductId: productId })}
+                        />
                       ) : (
-                        <span className="text-sm font-semibold text-primary px-1">{feedCodeLabel}</span>
+                        <span className="text-sm font-semibold text-primary px-1">{rowFeedCode}</span>
                       )}
 
                       <div className="relative min-w-0">
@@ -626,7 +723,7 @@ export function FeedingEntryPage() {
 
           <div className="flex items-stretch gap-2">
             <div className="flex-1 rounded-lg border border-border bg-surface px-3 py-2 flex items-center justify-between">
-              <span className="text-xs text-text-secondary">{t('feeding.todayTotal')}</span>
+              <span className="text-xs text-text-secondary">{dayTotalLabel}</span>
               <span className="font-bold text-base">{formatQty(dayTotal)}</span>
             </div>
             {canEdit && isFormActive && (

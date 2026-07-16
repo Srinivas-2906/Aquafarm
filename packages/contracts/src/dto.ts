@@ -89,6 +89,8 @@ export interface FeedingMealDto {
   scheduledTime: string | null;
   actualTime: string | null;
   feedQuantityKg: string;
+  feedProductId?: string | null;
+  feedCode?: string | null;
   checkTrayRemainingPercentage: CheckTrayOption | null;
   appetiteStatus: AppetiteStatus | null;
   remarks: string | null;
@@ -156,6 +158,24 @@ export interface InventorySummaryDto {
 export interface FarmInventoryTotalDto {
   farmId: string;
   totalStockKg: string;
+  numberOfBags: number;
+  asOfDate: string | null;
+}
+
+export interface FarmStockEntryDto {
+  id: string;
+  transactionDate: string;
+  feedProductId: string;
+  feedCode: string;
+  numberOfBags: number;
+  quantityKg: string;
+}
+
+export interface FarmStockEntriesDto {
+  farmId: string;
+  totalStockKg: string;
+  totalBags: number;
+  entries: FarmStockEntryDto[];
 }
 
 export interface PondTodayStatusDto {
@@ -180,6 +200,7 @@ export interface DashboardSummaryDto {
   totalFeedTodayKg: string;
   totalFeedUsedKg: string;
   currentFeedStockKg: string;
+  feedStockByCode: InventorySummaryDto[];
   pendingApprovals: number;
   unsyncedRecords: number;
   lowStockProducts: number;

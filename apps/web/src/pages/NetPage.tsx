@@ -14,7 +14,7 @@ type NetEntry = {
   pondName: string;
   pondCode: string;
   date: string;
-  bodyWeight: string;
+  bodyCount: string;
   createdAt: string;
 };
 
@@ -28,7 +28,21 @@ function readEntries(farmId: string): NetEntry[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(Boolean) as NetEntry[];
+    return parsed
+      .filter(Boolean)
+      .map((entry) => {
+        const row = entry as Partial<NetEntry> & { bodyWeight?: string };
+        return {
+          id: row.id || uuidv4(),
+          pondId: row.pondId || '',
+          pondName: row.pondName || '',
+          pondCode: row.pondCode || '',
+          date: row.date || '',
+          bodyCount: row.bodyCount ?? row.bodyWeight ?? '',
+          createdAt: row.createdAt || new Date().toISOString(),
+        };
+      })
+      .filter((entry) => entry.pondId && entry.date && entry.bodyCount);
   } catch {
     return [];
   }
@@ -38,13 +52,12 @@ function writeEntries(farmId: string, entries: NetEntry[]) {
   localStorage.setItem(storageKey(farmId), JSON.stringify(entries));
 }
 
-function parseBodyWeight(value: string): string | null {
+function parseBodyCount(value: string): string | null {
   const trimmed = value.trim();
-  if (!trimmed || !/^\d+(\.\d{1,3})?$/.test(trimmed)) return null;
-  const n = parseFloat(trimmed);
+  if (!trimmed || !/^\d+$/.test(trimmed)) return null;
+  const n = parseInt(trimmed, 10);
   if (Number.isNaN(n) || n <= 0) return null;
-  if (Number.isInteger(n)) return String(n);
-  return n.toFixed(3).replace(/\.?0+$/, '');
+  return String(n);
 }
 
 function formatNetDate(dateISO: string): string {
@@ -64,7 +77,7 @@ export function NetPage() {
   const [pondName, setPondName] = useState('');
   const [pondCode, setPondCode] = useState('');
   const [date, setDate] = useState(() => getTodayISO());
-  const [bodyWeight, setBodyWeight] = useState('');
+  const [bodyCount, setBodyCount] = useState('');
   const [tick, setTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -79,7 +92,7 @@ export function NetPage() {
     setPondId('');
     setPondName('');
     setPondCode('');
-    setBodyWeight('');
+    setBodyCount('');
     setError(null);
     setSaved(false);
   }, [selectedFarmId]);
@@ -111,9 +124,9 @@ export function NetPage() {
       return;
     }
 
-    const weight = parseBodyWeight(bodyWeight);
-    if (!weight) {
-      setError(t('net.invalidBodyWeight'));
+    const count = parseBodyCount(bodyCount);
+    if (!count) {
+      setError(t('net.invalidBodyCount'));
       return;
     }
     if (!date) {
@@ -128,14 +141,14 @@ export function NetPage() {
         pondName,
         pondCode,
         date,
-        bodyWeight: weight,
+        bodyCount: count,
         createdAt: new Date().toISOString(),
       };
 
       const all = readEntries(selectedFarmId);
       all.push(next);
       writeEntries(selectedFarmId, all);
-      setBodyWeight('');
+      setBodyCount('');
       setError(null);
       setSaved(true);
       setTick((n) => n + 1);
@@ -156,7 +169,7 @@ export function NetPage() {
     }
   };
 
-  const canSave = !!selectedFarmId && !!pondId && !!parseBodyWeight(bodyWeight) && !!date;
+  const canSave = !!selectedFarmId && !!pondId && !!parseBodyCount(bodyCount) && !!date;
 
   return (
     <AppShell title={t('net.title')}>
@@ -180,19 +193,19 @@ export function NetPage() {
           </div>
 
           <div>
-            <label className="label">{t('net.bodyWeight')}</label>
+            <label className="label">{t('net.bodyCount')}</label>
             <input
-              value={bodyWeight}
+              value={bodyCount}
               onChange={(e) => {
                 const v = e.target.value;
-                if (v === '' || /^\d*\.?\d{0,3}$/.test(v)) {
-                  setBodyWeight(v);
+                if (v === '' || /^\d*$/.test(v)) {
+                  setBodyCount(v);
                   setSaved(false);
                   setError(null);
                 }
               }}
-              inputMode="decimal"
-              placeholder="0.0"
+              inputMode="numeric"
+              placeholder="0"
               className="input-field text-base"
             />
           </div>
@@ -246,7 +259,7 @@ export function NetPage() {
                   {formatNetDate(entry.date)}
                 </span>
                 <span className="font-semibold text-primary whitespace-nowrap">
-                  {entry.bodyWeight} g
+                  {entry.bodyCount}
                 </span>
               </div>
             </div>

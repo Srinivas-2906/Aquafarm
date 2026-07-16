@@ -31,6 +31,7 @@ export class ReportsController {
       farmId: string;
       pondId?: string;
       feedProductId?: string;
+      feedProductIds?: string[];
       dateFrom: string;
       dateTo: string;
       reportType?: string;

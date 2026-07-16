@@ -21,6 +21,20 @@ export class InventoryController {
     return this.inventory.getFarmTotal(farmId);
   }
 
+  @Get('entries')
+  async entries(@Query('farmId') farmId: string) {
+    return this.inventory.getFarmStockEntries(farmId);
+  }
+
+  @Post('entries')
+  async addEntry(
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.inventory.addFarmStockEntry(body, userId, organizationId);
+  }
+
   @Patch('total')
   async setTotal(
     @Body() body: Record<string, unknown>,
@@ -28,6 +42,15 @@ export class InventoryController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     return this.inventory.setFarmTotal(body, userId, organizationId);
+  }
+
+  @Patch('product')
+  async setProduct(
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.inventory.setProductStock(body, userId, organizationId);
   }
 
   @Get('transactions')

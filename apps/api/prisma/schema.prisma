@@ -304,6 +304,7 @@ model FeedProduct {
   organization Organization @relation(fields: [organizationId], references: [id])
   farm         Farm         @relation(fields: [farmId], references: [id])
   feedingEntries FeedingEntry[]
+  feedingMeals FeedingMeal[]
   inventoryTransactions InventoryTransaction[]
 
   @@unique([farmId, feedCode])
@@ -360,6 +361,7 @@ model FeedingMeal {
   scheduledTime                String?
   actualTime                   String?
   feedQuantityKg               Decimal         @db.Decimal(12, 3)
+  feedProductId                String?
   checkTrayRemainingPercentage CheckTrayOption?
   appetiteStatus               AppetiteStatus?
   remarks                      String?
@@ -367,6 +369,7 @@ model FeedingMeal {
   updatedAt                    DateTime        @updatedAt
 
   feedingEntry FeedingEntry @relation(fields: [feedingEntryId], references: [id], onDelete: Cascade)
+  feedProduct  FeedProduct? @relation(fields: [feedProductId], references: [id])
   checkTrayObservations CheckTrayObservation[]
 
   @@unique([feedingEntryId, mealNumber])

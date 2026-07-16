@@ -2,9 +2,10 @@ import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef 
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FeedProductsService } from '../feed-products/feed-products.service';
-import { getTransactionDirection, decimalToString, sumDecimals } from '../common/utils/date.utils';
-import { inventoryTransactionSchema, setFarmInventoryTotalSchema } from '@aqualedger/validation';
+import { getTransactionDirection, decimalToString, sumDecimals, parseDateOnly, getFarmToday } from '../common/utils/date.utils';
+import { inventoryTransactionSchema, setFarmInventoryTotalSchema, setProductInventorySchema } from '@aqualedger/validation';
 import { v4 as uuidv4 } from 'uuid';
+import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
 
 @Injectable()
 export class InventoryService {
@@ -30,9 +31,24 @@ export class InventoryService {
 
   async getFarmTotal(farmId: string) {
     const summary = await this.getSummary(farmId);
+    const totalStockKg = sumDecimals(summary.map((p) => p.currentStockKg));
+    const total = parseFloat(totalStockKg);
+    const latestTx = await this.prisma.inventoryTransaction.findFirst({
+      where: {
+        farmId,
+        status: 'CONFIRMED',
+        type: { in: ['MANUAL_ADJUSTMENT_IN', 'MANUAL_ADJUSTMENT_OUT'] },
+      },
+      orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }],
+    });
+
     return {
       farmId,
-      totalStockKg: sumDecimals(summary.map((p) => p.currentStockKg)),
+      totalStockKg,
+      numberOfBags: Math.max(0, Math.floor(total / 25)),
+      asOfDate: latestTx
+        ? latestTx.transactionDate.toISOString().split('T')[0]
+        : null,
     };
   }
 
@@ -47,13 +63,23 @@ export class InventoryService {
       throw new BadRequestException(message || 'Invalid inventory total');
     }
 
-    const { farmId, quantityKg } = parsed.data;
+    const { farmId } = parsed.data;
+    const bagWeight = 25;
+    const quantityKg =
+      parsed.data.numberOfBags !== undefined
+        ? (parsed.data.numberOfBags * bagWeight).toFixed(3)
+        : parsed.data.quantityKg!;
+    const numberOfBags = parsed.data.numberOfBags;
+
     const farm = await this.prisma.farm.findFirst({
       where: { id: farmId, organizationId, status: 'ACTIVE' },
     });
     if (!farm) {
       throw new NotFoundException('Farm not found');
     }
+
+    const transactionDate =
+      parsed.data.transactionDate ?? getFarmToday(farm.timezone).toISOString().split('T')[0];
 
     await this.feedProducts.findByFarm(farmId);
 
@@ -72,7 +98,10 @@ export class InventoryService {
     }
 
     const primary = products[0];
-    const today = new Date().toISOString().split('T')[0];
+    const adjustmentRemarks =
+      numberOfBags !== undefined
+        ? `Manual stock adjustment (${numberOfBags} bags × ${bagWeight} kg)`
+        : 'Manual farm stock adjustment';
 
     for (const product of products) {
       if (product.id === primary.id) continue;
@@ -87,7 +116,7 @@ export class InventoryService {
           feedProductId: product.id,
           type: balance > 0 ? 'MANUAL_ADJUSTMENT_OUT' : 'MANUAL_ADJUSTMENT_IN',
           quantityKg: Math.abs(balance).toFixed(3),
-          transactionDate: today,
+          transactionDate,
           remarks: 'Manual farm stock adjustment',
         },
         userId,
@@ -105,8 +134,9 @@ export class InventoryService {
           feedProductId: primary.id,
           type: delta > 0 ? 'MANUAL_ADJUSTMENT_IN' : 'MANUAL_ADJUSTMENT_OUT',
           quantityKg: Math.abs(delta).toFixed(3),
-          transactionDate: today,
-          remarks: 'Manual farm stock adjustment',
+          transactionDate,
+          remarks: adjustmentRemarks,
+          ...(numberOfBags !== undefined && numberOfBags > 0 ? { numberOfBags } : {}),
         },
         userId,
         organizationId,
@@ -116,14 +146,188 @@ export class InventoryService {
     return this.getFarmTotal(farmId);
   }
 
+  async getFarmStockEntries(farmId: string) {
+    const farmTotal = await this.getFarmTotal(farmId);
+    const entries = await this.prisma.inventoryTransaction.findMany({
+      where: {
+        farmId,
+        status: 'CONFIRMED',
+        direction: 'IN',
+        numberOfBags: { not: null },
+        type: { in: ['FEED_RECEIVED', 'MANUAL_ADJUSTMENT_IN'] },
+      },
+      include: { feedProduct: true },
+      orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    const totalBags = entries.reduce((sum, entry) => sum + (entry.numberOfBags ?? 0), 0);
+
+    return {
+      farmId,
+      totalStockKg: farmTotal.totalStockKg,
+      totalBags,
+      entries: entries.map((entry) => ({
+        id: entry.id,
+        transactionDate: entry.transactionDate.toISOString().split('T')[0],
+        feedProductId: entry.feedProductId,
+        feedCode: entry.feedProduct?.feedCode ?? '',
+        numberOfBags: entry.numberOfBags ?? 0,
+        quantityKg: decimalToString(entry.quantityKg),
+      })),
+    };
+  }
+
+  async addFarmStockEntry(
+    input: Record<string, unknown>,
+    userId: string,
+    organizationId: string,
+  ) {
+    const farmId = typeof input.farmId === 'string' ? input.farmId.trim() : '';
+    const feedProductId =
+      typeof input.feedProductId === 'string' ? input.feedProductId.trim() : '';
+    const transactionDate =
+      typeof input.transactionDate === 'string' ? input.transactionDate.trim() : '';
+    const numberOfBags =
+      typeof input.numberOfBags === 'number'
+        ? input.numberOfBags
+        : typeof input.numberOfBags === 'string'
+          ? parseInt(input.numberOfBags, 10)
+          : NaN;
+
+    if (!farmId) {
+      throw new BadRequestException('Farm is required');
+    }
+    if (!feedProductId) {
+      throw new BadRequestException('Select a feed code');
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(transactionDate)) {
+      throw new BadRequestException('Pick a valid date');
+    }
+    if (!Number.isInteger(numberOfBags) || numberOfBags < 1) {
+      throw new BadRequestException('Enter number of bags');
+    }
+
+    const farm = await this.prisma.farm.findFirst({
+      where: { id: farmId, organizationId, status: 'ACTIVE' },
+    });
+    if (!farm) {
+      throw new NotFoundException('Farm not found');
+    }
+
+    await this.feedProducts.findByFarm(farmId);
+
+    const product = await this.prisma.feedProduct.findFirst({
+      where: { id: feedProductId, farmId, organizationId, status: 'ACTIVE' },
+    });
+    if (!product) {
+      throw new BadRequestException('Select a feed code');
+    }
+
+    const bagWeight = parseFloat(product.bagWeightKg.toString()) || 25;
+    const quantityKg = (numberOfBags * bagWeight).toFixed(3);
+
+    const tx = await this.createTransaction(
+      {
+        clientTransactionId: uuidv4(),
+        farmId,
+        feedProductId: product.id,
+        type: 'FEED_RECEIVED',
+        quantityKg,
+        transactionDate,
+        numberOfBags,
+        remarks: 'Farm stock entry',
+      },
+      userId,
+      organizationId,
+    );
+
+    return {
+      id: tx.id,
+      transactionDate: tx.transactionDate,
+      feedProductId: product.id,
+      feedCode: product.feedCode,
+      numberOfBags,
+      quantityKg: tx.quantityKg,
+    };
+  }
+
+  async setProductStock(
+    input: Record<string, unknown>,
+    userId: string,
+    organizationId: string,
+  ) {
+    const parsed = setProductInventorySchema.safeParse(input);
+    if (!parsed.success) {
+      const message = parsed.error.errors.map((e) => e.message).join(', ');
+      throw new BadRequestException(message || 'Invalid inventory update');
+    }
+
+    const { farmId, feedProductId } = parsed.data;
+    const farm = await this.prisma.farm.findFirst({
+      where: { id: farmId, organizationId, status: 'ACTIVE' },
+    });
+    if (!farm) throw new NotFoundException('Farm not found');
+
+    const product = await this.prisma.feedProduct.findFirst({
+      where: { id: feedProductId, farmId, organizationId, status: 'ACTIVE' },
+    });
+    if (!product) throw new NotFoundException('Feed product not found');
+
+    const bagWeight = parseFloat(product.bagWeightKg.toString()) || 25;
+    const targetKg =
+      parsed.data.numberOfBags !== undefined
+        ? (parsed.data.numberOfBags * bagWeight).toFixed(3)
+        : parsed.data.quantityKg!;
+
+    const current = parseFloat(await this.getProductBalance(feedProductId));
+    const delta = parseFloat(targetKg) - current;
+    if (Math.abs(delta) < 0.001) {
+      const summary = await this.getSummary(farmId);
+      return summary.find((item) => item.feedProductId === feedProductId) ?? summary[0];
+    }
+
+    const today = getFarmToday(farm.timezone).toISOString().split('T')[0];
+    await this.createTransaction(
+      {
+        clientTransactionId: uuidv4(),
+        farmId,
+        feedProductId,
+        type: delta > 0 ? 'MANUAL_ADJUSTMENT_IN' : 'MANUAL_ADJUSTMENT_OUT',
+        quantityKg: Math.abs(delta).toFixed(3),
+        transactionDate: today,
+        remarks:
+          parsed.data.numberOfBags !== undefined
+            ? `Manual stock adjustment (${parsed.data.numberOfBags} bags × ${bagWeight} kg)`
+            : 'Manual stock adjustment',
+        numberOfBags: parsed.data.numberOfBags,
+      },
+      userId,
+      organizationId,
+    );
+
+    const summary = await this.getSummary(farmId);
+    const updated = summary.find((item) => item.feedProductId === feedProductId);
+    if (!updated) throw new NotFoundException('Feed product not found');
+    return updated;
+  }
+
   async getSummary(farmId: string) {
+    const farm = await this.prisma.farm.findFirst({ where: { id: farmId, status: 'ACTIVE' } });
+    if (!farm) throw new NotFoundException('Farm not found');
+
     const products = await this.prisma.feedProduct.findMany({
       where: { farmId, status: 'ACTIVE' },
     });
 
+    const feedCodeOrder = ['1C', '2C', '20', '3S', '3SP', '3P'];
+    products.sort(
+      (a, b) => feedCodeOrder.indexOf(a.feedCode) - feedCodeOrder.indexOf(b.feedCode),
+    );
+
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const today = now.toISOString().split('T')[0];
+    const zonedNow = toZonedTime(now, farm.timezone);
+    const today = formatInTimeZone(zonedNow, farm.timezone, 'yyyy-MM-dd');
+    const monthStart = parseDateOnly(formatInTimeZone(zonedNow, farm.timezone, 'yyyy-MM-01'));
 
     return Promise.all(
       products.map(async (p) => {
@@ -205,7 +409,7 @@ export class InventoryService {
         type: data.type,
         direction,
         quantityKg: data.quantityKg,
-        transactionDate: new Date(data.transactionDate),
+        transactionDate: parseDateOnly(data.transactionDate),
         remarks: data.remarks,
         supplierName: data.supplierName,
         referenceNumber: data.referenceNumber,
@@ -242,7 +446,12 @@ export class InventoryService {
     clientTransactionId: string;
   }) {
     const existing = await this.prisma.inventoryTransaction.findFirst({
-      where: { feedingEntryId: params.feedingEntryId, type: 'FEED_CONSUMED', status: 'CONFIRMED' },
+      where: {
+        feedingEntryId: params.feedingEntryId,
+        feedProductId: params.feedProductId,
+        type: 'FEED_CONSUMED',
+        status: 'CONFIRMED',
+      },
     });
 
     if (existing) {
@@ -270,44 +479,46 @@ export class InventoryService {
   }
 
   async reverseFeedConsumed(feedingEntryId: string, userId: string, reason: string) {
-    const original = await this.prisma.inventoryTransaction.findFirst({
+    const originals = await this.prisma.inventoryTransaction.findMany({
       where: { feedingEntryId, type: 'FEED_CONSUMED', status: 'CONFIRMED' },
     });
-    if (!original) return;
+    if (!originals.length) return;
 
-    const reversal = await this.prisma.inventoryTransaction.create({
-      data: {
-        clientTransactionId: uuidv4(),
+    for (const original of originals) {
+      const reversal = await this.prisma.inventoryTransaction.create({
+        data: {
+          clientTransactionId: uuidv4(),
+          organizationId: original.organizationId,
+          farmId: original.farmId,
+          feedProductId: original.feedProductId,
+          pondId: original.pondId,
+          feedingEntryId,
+          type: 'REVERSAL',
+          direction: 'IN',
+          quantityKg: original.quantityKg,
+          transactionDate: original.transactionDate,
+          remarks: `Reversal: ${reason}`,
+          createdByUserId: userId,
+          status: 'CONFIRMED',
+          reversedTransactionId: original.id,
+        },
+      });
+
+      await this.prisma.inventoryTransaction.update({
+        where: { id: original.id },
+        data: { status: 'REVERSED' },
+      });
+
+      await this.audit.log({
         organizationId: original.organizationId,
         farmId: original.farmId,
-        feedProductId: original.feedProductId,
-        pondId: original.pondId,
-        feedingEntryId,
-        type: 'REVERSAL',
-        direction: 'IN',
-        quantityKg: original.quantityKg,
-        transactionDate: original.transactionDate,
-        remarks: `Reversal: ${reason}`,
-        createdByUserId: userId,
-        status: 'CONFIRMED',
-        reversedTransactionId: original.id,
-      },
-    });
-
-    await this.prisma.inventoryTransaction.update({
-      where: { id: original.id },
-      data: { status: 'REVERSED' },
-    });
-
-    await this.audit.log({
-      organizationId: original.organizationId,
-      farmId: original.farmId,
-      userId,
-      entityType: 'INVENTORY_TRANSACTION',
-      entityId: reversal.id,
-      action: 'REVERSE',
-      reason,
-    });
+        userId,
+        entityType: 'INVENTORY_TRANSACTION',
+        entityId: reversal.id,
+        action: 'REVERSE',
+        reason,
+      });
+    }
   }
 
   async findTransactions(farmId: string, page = 1, pageSize = 50) {
