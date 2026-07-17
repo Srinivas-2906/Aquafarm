@@ -1,189 +1,298 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Pencil } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, ApiError } from '@/lib/api';
-import { formatQty } from '@/lib/utils';
-import type { FarmInventoryTotalDto } from '@aqualedger/contracts';
+import { getTodayISO, formatQty, formatShortDate } from '@/lib/utils';
+import type { FarmStockEntriesDto, FeedProductDto } from '@aqualedger/contracts';
 
-function toEditableStock(value: string): string {
-  const n = parseFloat(value);
-  if (Number.isNaN(n)) return '0';
-  if (Number.isInteger(n)) return String(n);
-  return n.toFixed(3).replace(/\.?0+$/, '');
+const FEED_CODE_ORDER = ['1C', '2C', '20', '3S', '3SP', '3P'];
+
+function sortFeedProducts(products: FeedProductDto[]): FeedProductDto[] {
+  return [...products].sort(
+    (a, b) => FEED_CODE_ORDER.indexOf(a.feedCode) - FEED_CODE_ORDER.indexOf(b.feedCode),
+  );
 }
 
-function isDraftQuantity(value: string): boolean {
-  return value === '' || /^\d*\.?\d{0,3}$/.test(value);
+function isDraftBags(value: string): boolean {
+  return value === '' || /^\d*$/.test(value);
 }
 
-function parseQuantityForSave(value: string): string | null {
+function parseBagsForSave(value: string): number | null {
   const trimmed = value.trim();
-  if (!trimmed) return '0';
+  if (!trimmed) return null;
+  if (!/^\d+$/.test(trimmed)) return null;
+  const n = parseInt(trimmed, 10);
+  if (Number.isNaN(n) || n < 1) return null;
+  return n;
+}
 
-  const normalized = trimmed.endsWith('.') ? trimmed.slice(0, -1) : trimmed;
-  if (!normalized) return '0';
-  if (!/^\d+(\.\d{1,3})?$/.test(normalized)) return null;
-
-  const n = parseFloat(normalized);
-  if (Number.isNaN(n) || n < 0) return null;
-  if (Number.isInteger(n)) return String(n);
-  return n.toFixed(3).replace(/\.?0+$/, '');
+function resolveFeedCode(
+  entry: FarmStockEntriesDto['entries'][number],
+  products: FeedProductDto[],
+): string {
+  if (entry.feedCode) return entry.feedCode;
+  return products.find((p) => p.id === entry.feedProductId)?.feedCode ?? '—';
 }
 
 export function InventoryPage() {
   const { t } = useTranslation();
   const { selectedFarmId } = useAuth();
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'view' | 'edit'>('view');
-  const [draft, setDraft] = useState('0');
+  const [draftBags, setDraftBags] = useState('');
+  const [draftDate, setDraftDate] = useState(() => getTodayISO());
+  const [feedProductId, setFeedProductId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['inventory-total', selectedFarmId],
-    queryFn: () => api.get<FarmInventoryTotalDto>(`/inventory/total?farmId=${selectedFarmId}`),
+  const todayISO = getTodayISO();
+
+  const { data: feedProducts } = useQuery({
+    queryKey: ['feed-products', selectedFarmId],
+    queryFn: () => api.get<FeedProductDto[]>(`/farms/${selectedFarmId}/feed-products`),
     enabled: !!selectedFarmId,
   });
 
-  const savedStock = data ? toEditableStock(data.totalStockKg) : '0';
-  const parsedDraft = parseQuantityForSave(draft);
-  const canSave = parsedDraft !== null && isDraftQuantity(draft);
+  const sortedProducts = useMemo(
+    () => (feedProducts ? sortFeedProducts(feedProducts) : []),
+    [feedProducts],
+  );
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['inventory-entries', selectedFarmId],
+    queryFn: () => api.get<FarmStockEntriesDto>(`/inventory/entries?farmId=${selectedFarmId}`),
+    enabled: !!selectedFarmId,
+  });
 
   useEffect(() => {
-    setMode('view');
-    setSaved(false);
     setError(null);
+    setDraftBags('');
+    setDraftDate(getTodayISO());
+    setFeedProductId('');
+    setSaved(false);
   }, [selectedFarmId]);
 
-  const startEditing = () => {
-    setMode('edit');
-    setSaved(false);
-    setError(null);
-    setDraft(savedStock);
-  };
-
-  const cancelEditing = () => {
-    setMode('view');
-    setSaved(false);
-    setError(null);
-    setDraft(savedStock);
-  };
+  useEffect(() => {
+    if (!sortedProducts.length) return;
+    if (!feedProductId || !sortedProducts.some((p) => p.id === feedProductId)) {
+      setFeedProductId(sortedProducts[0].id);
+    }
+  }, [sortedProducts, feedProductId]);
 
   const handleSave = async () => {
-    if (!selectedFarmId) return;
-    const quantityKg = parseQuantityForSave(draft);
-    if (!quantityKg) {
-      setError(t('inventory.invalidQuantity'));
+    setError(null);
+
+    if (!selectedFarmId) {
+      setError(t('inventory.selectFarm'));
+      return;
+    }
+
+    if (!feedProductId) {
+      setError(t('inventory.selectFeedCode'));
+      return;
+    }
+
+    if (!draftDate) {
+      setError(t('inventory.enterDate'));
+      return;
+    }
+
+    const numberOfBags = parseBagsForSave(draftBags);
+    if (numberOfBags === null) {
+      setError(t('inventory.enterBags'));
       return;
     }
 
     setSaving(true);
-    setError(null);
     setSaved(false);
 
     try {
-      const updated = await api.patch<FarmInventoryTotalDto>('/inventory/total', {
+      await api.post('/inventory/entries', {
         farmId: selectedFarmId,
-        quantityKg,
+        feedProductId,
+        numberOfBags,
+        transactionDate: draftDate,
       });
-      queryClient.setQueryData(['inventory-total', selectedFarmId], updated);
-      setDraft(toEditableStock(updated.totalStockKg));
-      await queryClient.invalidateQueries({ queryKey: ['dashboard', selectedFarmId] });
+      setDraftBags('');
       setSaved(true);
-      setMode('view');
+      await queryClient.invalidateQueries({ queryKey: ['inventory-entries', selectedFarmId] });
+      await queryClient.invalidateQueries({ queryKey: ['dashboard', selectedFarmId] });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t('common.error'));
+      const raw = err instanceof ApiError ? err.message : t('common.error');
+      const lower = raw.toLowerCase();
+      if (lower.includes('feed code')) {
+        setError(t('inventory.selectFeedCode'));
+      } else if (lower.includes('number of bags')) {
+        setError(t('inventory.enterBags'));
+      } else if (lower.includes('date')) {
+        setError(t('inventory.enterDate'));
+      } else if (lower.includes('no feed products')) {
+        setError(t('inventory.noProducts'));
+      } else {
+        setError(raw);
+      }
     } finally {
       setSaving(false);
     }
   };
 
-  const isEditing = mode === 'edit';
-
   return (
     <AppShell title={t('inventory.title')}>
-      <div className="px-4 py-4 space-y-4 max-w-lg mx-auto">
+      <div className="px-4 py-4 max-w-lg mx-auto flex flex-col gap-3 min-h-0">
         {isLoading && <p className="text-center py-8">{t('common.loading')}</p>}
 
         {!isLoading && (
-          <div className="card bg-primary-light space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-sm text-text-secondary">{t('inventory.totalStock')}</p>
-                <p className="text-xs text-text-secondary mt-1">{t('inventory.perFarmNote')}</p>
+          <>
+            <div className="card bg-primary-light space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm text-text-secondary">{t('inventory.farmStock')}</span>
+                <span className="text-xl font-bold text-primary tabular-nums">
+                  {formatQty(data?.totalStockKg ?? '0')}
+                </span>
               </div>
-              {!isEditing && (
-                <button
-                  type="button"
-                  onClick={startEditing}
-                  className="btn-secondary btn-inline !text-xs !py-1.5 !px-2.5 !min-h-0 shrink-0 flex items-center gap-1"
-                >
-                  <Pencil size={14} />
-                  {t('common.edit')}
-                </button>
-              )}
-            </div>
 
-            {isEditing ? (
-              <>
-                <div className="flex items-end gap-2">
-                  <div className="flex-1">
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={draft}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (!isDraftQuantity(v)) return;
-                        setDraft(v);
-                        setSaved(false);
-                        setError(null);
-                      }}
-                      onFocus={(e) => e.target.select()}
-                      className="input-field text-3xl font-bold !py-3"
-                      aria-label={t('inventory.totalStock')}
-                      autoFocus
-                    />
-                  </div>
-                  <span className="text-xl font-semibold text-primary pb-3">kg</span>
+              <div className="grid grid-cols-[minmax(0,1.05fr)_minmax(0,0.72fr)_minmax(0,0.72fr)] gap-x-3 gap-y-2 items-end min-w-0">
+                <div className="min-w-0 pr-1">
+                  <label className="label !mb-0.5" htmlFor="inventory-date">
+                    {t('inventory.dateLabel')}
+                  </label>
+                  <input
+                    id="inventory-date"
+                    type="date"
+                    value={draftDate}
+                    max={todayISO}
+                    onChange={(e) => {
+                      setDraftDate(e.target.value);
+                      setError(null);
+                      setSaved(false);
+                    }}
+                    className="input-compact !min-h-0 !py-2 !px-1 !text-xs font-semibold w-full min-w-0 max-w-full box-border"
+                  />
                 </div>
 
-                <div className="flex gap-2">
-                  <button type="button" onClick={cancelEditing} className="btn-secondary flex-1 !py-2 !text-sm">
-                    {t('common.cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleSave()}
-                    disabled={saving || !selectedFarmId || !canSave}
-                    className="btn-primary flex-1 !py-2 !text-sm"
+                <div className="min-w-0 pl-0.5">
+                  <label className="label !mb-0.5" htmlFor="inventory-feed-code">
+                    {t('feeding.feedCode')}
+                  </label>
+                  <select
+                    id="inventory-feed-code"
+                    value={feedProductId}
+                    onChange={(e) => {
+                      setFeedProductId(e.target.value);
+                      setError(null);
+                      setSaved(false);
+                    }}
+                    className="input-compact !min-h-0 !py-2 !text-sm font-bold w-full min-w-0"
+                    disabled={!sortedProducts.length}
                   >
-                    {saving ? t('common.loading') : t('common.save')}
-                  </button>
+                    {!sortedProducts.length && <option value="">{t('inventory.noProducts')}</option>}
+                    {sortedProducts.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.feedCode}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              </>
-            ) : (
+
+                <div className="min-w-0">
+                  <label className="label !mb-0.5" htmlFor="inventory-bags">
+                    {t('inventory.bagsLabel')}
+                  </label>
+                  <input
+                    id="inventory-bags"
+                    type="text"
+                    inputMode="numeric"
+                    value={draftBags}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (!isDraftBags(v)) return;
+                      setDraftBags(v);
+                      setError(null);
+                      setSaved(false);
+                    }}
+                    className="input-field !py-2 !text-lg font-bold w-full min-w-0"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+
+              {error && (
+                <p className="text-danger text-sm" role="alert">
+                  {error}
+                </p>
+              )}
+              {isError && !error && (
+                <p className="text-danger text-sm">{t('inventory.loadError')}</p>
+              )}
+
+              {saved && !error && (
+                <p className="text-success text-sm font-medium">{t('inventory.saved')}</p>
+              )}
+
               <button
                 type="button"
-                onClick={startEditing}
-                className="text-left w-full"
+                onClick={() => void handleSave()}
+                disabled={saving || !selectedFarmId || !sortedProducts.length}
+                className="btn-primary w-full !py-2.5 !text-sm"
               >
-                <p className="text-3xl font-bold text-primary">{formatQty(savedStock)}</p>
+                {saving ? t('common.loading') : t('inventory.saveStock')}
               </button>
-            )}
+            </div>
 
-            {isError && !error && (
-              <p className="text-danger text-sm">{t('inventory.loadError')}</p>
-            )}
-            {error && <p className="text-danger text-sm">{error}</p>}
-            {saved && !isEditing && (
-              <p className="text-success text-sm font-medium">{t('feeding.saved')}</p>
-            )}
-          </div>
+            <div className="card space-y-2 flex-1 min-h-0">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-medium text-text-primary">{t('inventory.records')}</p>
+                {!!data?.entries.length && (
+                  <p className="text-xs text-text-secondary tabular-nums text-right shrink-0">
+                    {t('inventory.recordsTotal', {
+                      bags: data.totalBags,
+                      kg: formatQty(
+                        String(
+                          data.entries.reduce((sum, e) => sum + parseFloat(e.quantityKg), 0),
+                        ),
+                      ),
+                    })}
+                  </p>
+                )}
+              </div>
+
+              {!data?.entries.length ? (
+                <p className="text-sm text-text-secondary py-4 text-center">{t('inventory.noRecords')}</p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-[minmax(0,1.1fr)_auto_minmax(0,0.9fr)_minmax(0,0.9fr)] gap-x-2 gap-y-0 px-1 text-[11px] font-medium text-text-secondary uppercase tracking-wide">
+                    <span>{t('inventory.dateLabel')}</span>
+                    <span>{t('feeding.feedCode')}</span>
+                    <span className="text-right">{t('inventory.bagsLabel')}</span>
+                    <span className="text-right">{t('inventory.totalKgLabel')}</span>
+                  </div>
+                  <ul className="divide-y divide-border max-h-[50vh] overflow-y-auto">
+                    {data.entries.map((entry) => (
+                      <li
+                        key={entry.id}
+                        className="grid grid-cols-[minmax(0,1.1fr)_auto_minmax(0,0.9fr)_minmax(0,0.9fr)] gap-x-2 gap-y-0 items-center py-2.5 px-1 min-w-0"
+                      >
+                        <span className="text-sm font-medium text-text-primary truncate">
+                          {formatShortDate(entry.transactionDate)}
+                        </span>
+                        <span className="text-xs font-bold text-primary bg-primary/10 rounded px-1.5 py-0.5 shrink-0">
+                          {resolveFeedCode(entry, sortedProducts)}
+                        </span>
+                        <span className="text-sm font-semibold text-text-primary tabular-nums text-right truncate">
+                          {entry.numberOfBags} {t('inventory.bagsUnitShort')}
+                        </span>
+                        <span className="text-sm text-text-secondary tabular-nums text-right truncate">
+                          {formatQty(entry.quantityKg)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          </>
         )}
       </div>
     </AppShell>

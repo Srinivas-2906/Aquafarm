@@ -3,6 +3,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { BadRequestException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
+import { ForbiddenException } from '@nestjs/common';
 
 @Injectable()
 export class UsersService {
@@ -42,11 +43,12 @@ export class UsersService {
     return { id: user.id, activationCode, message: 'Supervisor created. Share activation code.' };
   }
 
-  async deactivate(userId: string) {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { status: 'INACTIVE' },
-    });
+  async deactivate(organizationId: string, userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
+    if (!user || user.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
+    await this.prisma.user.update({ where: { id: userId }, data: { status: 'INACTIVE' } });
     await this.prisma.session.deleteMany({ where: { userId } });
     return { message: 'User deactivated' };
   }

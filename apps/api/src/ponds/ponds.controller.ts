@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PondsService } from './ponds.service';
 import { FarmAccessGuard, JwtAuthGuard } from '../common/guards/auth.guards';
@@ -26,6 +26,18 @@ export class PondsController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     return this.ponds.create({ farmId, organizationId, input: body });
+  }
+
+  @Patch('farms/:farmId/ponds/:pondId')
+  @UseGuards(FarmAccessGuard)
+  @RequireFarmAccess()
+  async update(
+    @Param('farmId') farmId: string,
+    @Param('pondId') pondId: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.ponds.update({ farmId, pondId, organizationId, input: body });
   }
 
   @Get('ponds/:pondId')

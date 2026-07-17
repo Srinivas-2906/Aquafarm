@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FeedingService } from '../feeding/feeding.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -56,6 +57,9 @@ export class ApprovalsService {
       include: { meals: true },
     });
     if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
     if (entry.status !== 'PENDING_OWNER_APPROVAL') {
       throw new NotFoundException('Entry is not pending approval');
     }
@@ -93,6 +97,9 @@ export class ApprovalsService {
   async reject(entryId: string, reason: string, userId: string, organizationId: string) {
     const entry = await this.prisma.feedingEntry.findUnique({ where: { id: entryId } });
     if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
 
     await this.prisma.feedingEntry.update({
       where: { id: entryId },

@@ -1,13 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { calculateDoc } from '../common/utils/date.utils';
-import { pondSchema } from '@aqualedger/validation';
+import { calculateDoc, getFarmToday } from '../common/utils/date.utils';
+import { pondSchema, pondUpdateSchema } from '@aqualedger/validation';
 
 @Injectable()
 export class PondsService {
   constructor(private prisma: PrismaService) {}
 
   async findByFarm(farmId: string) {
+    const farm = await this.prisma.farm.findUnique({ where: { id: farmId } });
+    const timezone = farm?.timezone || 'Asia/Kolkata';
     const ponds = await this.prisma.pond.findMany({
       where: { farmId, status: 'ACTIVE' },
       orderBy: { code: 'asc' },
@@ -26,7 +28,7 @@ export class PondsService {
           type: pond.type,
           area: pond.area?.toString() ?? null,
           status: pond.status,
-          activeCycle: activeCycle ? this.mapActiveCycle(activeCycle) : null,
+          activeCycle: activeCycle ? this.mapActiveCycle(activeCycle, timezone) : null,
         };
       }),
     );
@@ -87,7 +89,58 @@ export class PondsService {
       type: pond.type,
       area: pond.area?.toString() ?? null,
       status: pond.status,
-      activeCycle: this.mapActiveCycle(activeCycle),
+      activeCycle: this.mapActiveCycle(activeCycle, farm.timezone),
+    };
+  }
+
+  async update(params: {
+    farmId: string;
+    pondId: string;
+    organizationId: string;
+    input: Record<string, unknown>;
+  }) {
+    const parsed = pondUpdateSchema.safeParse(params.input);
+    if (!parsed.success) {
+      const message = parsed.error.errors.map((e) => e.message).join(', ');
+      throw new BadRequestException(message || 'Invalid tank update');
+    }
+
+    const pond = await this.prisma.pond.findFirst({
+      where: {
+        id: params.pondId,
+        farmId: params.farmId,
+        organizationId: params.organizationId,
+        status: 'ACTIVE',
+      },
+    });
+    if (!pond) throw new NotFoundException('Tank not found');
+
+    const updated = await this.prisma.pond.update({
+      where: { id: pond.id },
+      data: { name: parsed.data.name },
+    });
+
+    await this.prisma.cultureCycle.updateMany({
+      where: { pondId: pond.id, status: 'ACTIVE' },
+      data: { cycleName: `${parsed.data.name} - Vannamei` },
+    });
+
+    const activeCycle = await this.prisma.cultureCycle.findFirst({
+      where: { pondId: pond.id, status: 'ACTIVE' },
+    });
+
+    const farm = await this.prisma.farm.findUnique({ where: { id: params.farmId } });
+    const timezone = farm?.timezone || 'Asia/Kolkata';
+
+    return {
+      id: updated.id,
+      farmId: updated.farmId,
+      name: updated.name,
+      code: updated.code,
+      type: updated.type,
+      area: updated.area?.toString() ?? null,
+      status: updated.status,
+      activeCycle: activeCycle ? this.mapActiveCycle(activeCycle, timezone) : null,
     };
   }
 
@@ -97,10 +150,13 @@ export class PondsService {
     });
     if (!pond) throw new NotFoundException('Tank not found');
 
+    const farm = await this.prisma.farm.findUnique({ where: { id: pond.farmId } });
+    const timezone = farm?.timezone || 'Asia/Kolkata';
+
     const existing = await this.prisma.cultureCycle.findFirst({
       where: { pondId, status: 'ACTIVE' },
     });
-    if (existing) return this.mapActiveCycle(existing);
+    if (existing) return this.mapActiveCycle(existing, timezone);
 
     const activeCycle = await this.createDefaultCycle({
       organizationId,
@@ -108,7 +164,7 @@ export class PondsService {
       pondId: pond.id,
       pondName: pond.name,
     });
-    return this.mapActiveCycle(activeCycle);
+    return this.mapActiveCycle(activeCycle, timezone);
   }
 
   private async createDefaultCycle(params: {
@@ -117,8 +173,9 @@ export class PondsService {
     pondId: string;
     pondName: string;
   }) {
-    const stockingDate = new Date();
-    stockingDate.setHours(0, 0, 0, 0);
+    const farm = await this.prisma.farm.findUnique({ where: { id: params.farmId } });
+    const timezone = farm?.timezone || 'Asia/Kolkata';
+    const stockingDate = getFarmToday(timezone);
 
     return this.prisma.cultureCycle.create({
       data: {
@@ -142,8 +199,8 @@ export class PondsService {
     species: string;
     usualMealsPerDay: number;
     status: string;
-  }) {
-    const today = new Date();
+  }, farmTimezone: string) {
+    const today = getFarmToday(farmTimezone);
     return {
       id: activeCycle.id,
       pondId: activeCycle.pondId,

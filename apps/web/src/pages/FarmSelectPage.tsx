@@ -22,7 +22,7 @@ export function FarmSelectPage() {
   const [error, setError] = useState<string | null>(null);
 
   const { data: farms, isLoading } = useQuery({
-    queryKey: ['farms'],
+    queryKey: ['farms', user?.id],
     queryFn: () => api.get<FarmDto[]>('/farms'),
   });
 
@@ -61,7 +61,7 @@ export function FarmSelectPage() {
   };
 
   return (
-    <AppShell title={t('farms.selectTitle')}>
+    <AppShell title={t('farms.selectTitle')} showNav={false}>
       <div className="px-4 py-4 space-y-4">
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm text-text-secondary min-w-0">{t('farms.tapToOpen')}</p>

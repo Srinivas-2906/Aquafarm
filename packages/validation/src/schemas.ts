@@ -52,6 +52,7 @@ export const feedingMealSchema = z.object({
   scheduledTime: z.string().optional(),
   actualTime: z.string().optional(),
   feedQuantityKg: decimalKg,
+  feedProductId: z.string().uuid().optional(),
   checkTrayRemainingPercentage: z.nativeEnum(CheckTrayOption).optional(),
   appetiteStatus: z.nativeEnum(AppetiteStatus).optional(),
   remarks: z.string().max(500).optional(),
@@ -60,6 +61,7 @@ export const feedingMealSchema = z.object({
 export const feedingMealUpdateSchema = z
   .object({
     feedQuantityKg: decimalKg.optional(),
+    feedProductId: z.string().uuid().optional(),
     actualTime: z.string().regex(/^\d{2}:\d{2}$/, 'Enter a valid time').optional(),
     checkTrayRemainingPercentage: z.nativeEnum(CheckTrayOption).optional(),
     appetiteStatus: z.nativeEnum(AppetiteStatus).optional(),
@@ -112,10 +114,34 @@ const decimalKgNonNegative = z
   .regex(/^\d+(\.\d{1,3})?$/, 'Enter a valid quantity in kg')
   .refine((v) => parseFloat(v) >= 0, 'Quantity cannot be negative');
 
-export const setFarmInventoryTotalSchema = z.object({
+export const setFarmInventoryTotalSchema = z
+  .object({
+    farmId: entityId,
+    quantityKg: decimalKgNonNegative.optional(),
+    numberOfBags: z.number().int().min(0).optional(),
+    transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a valid date').optional(),
+  })
+  .refine((data) => data.quantityKg !== undefined || data.numberOfBags !== undefined, {
+    message: 'Enter number of bags',
+  });
+
+export const addFarmStockEntrySchema = z.object({
   farmId: entityId,
-  quantityKg: decimalKgNonNegative,
+  feedProductId: z.string().uuid('Select a feed code'),
+  transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a valid date'),
+  numberOfBags: z.number().int().min(1, 'Enter number of bags'),
 });
+
+export const setProductInventorySchema = z
+  .object({
+    farmId: entityId,
+    feedProductId: z.string().uuid(),
+    quantityKg: decimalKgNonNegative.optional(),
+    numberOfBags: z.number().int().min(0).optional(),
+  })
+  .refine((data) => data.quantityKg !== undefined || data.numberOfBags !== undefined, {
+    message: 'Enter quantity in kg or number of bags',
+  });
 
 export const pondSchema = z.object({
   name: z.string().min(1).max(100),
@@ -124,6 +150,10 @@ export const pondSchema = z.object({
   area: z.string().optional(),
   areaUnit: z.string().optional(),
   capacity: z.string().optional(),
+});
+
+export const pondUpdateSchema = z.object({
+  name: z.string().min(1).max(100),
 });
 
 export const farmSchema = z.object({
@@ -189,4 +219,5 @@ export type LoginInput = z.infer<typeof loginSchema>;
 export type FeedingEntryInput = z.infer<typeof feedingEntrySchema>;
 export type InventoryTransactionInput = z.infer<typeof inventoryTransactionSchema>;
 export type SetFarmInventoryTotalInput = z.infer<typeof setFarmInventoryTotalSchema>;
+export type AddFarmStockEntryInput = z.infer<typeof addFarmStockEntrySchema>;
 export type SyncBatchInput = z.infer<typeof syncBatchSchema>;

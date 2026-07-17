@@ -5,17 +5,27 @@ import { LogOut, CheckCircle, History, Settings, FileText, UserPlus } from 'luci
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
+import { UserRole } from '@/types/roles';
 
 export function MorePage() {
   const { t, i18n } = useTranslation();
   const { user, logout } = useAuth();
 
+  const isOwner = user?.role === UserRole.OWNER;
+
   const items = [
-    { to: '/reports', icon: FileText, label: t('nav.reports') },
-    { to: '/invite-supervisor', icon: UserPlus, label: t('inviteSupervisor.title', 'Invite Supervisor') },
-    { to: '/approvals', icon: CheckCircle, label: t('approvals.title') },
-    { to: '/audit', icon: History, label: 'Audit History' },
-    { to: '/settings', icon: Settings, label: 'Farm Settings' },
+    // Always available
+    { to: '/records', icon: FileText, label: t('nav.records') },
+    // Owner-only items (routes + APIs are still owner-only)
+    ...(isOwner
+      ? [
+          { to: '/reports', icon: FileText, label: t('nav.reports') },
+          { to: '/invite-supervisor', icon: UserPlus, label: t('inviteSupervisor.title', 'Invite Supervisor') },
+          { to: '/approvals', icon: CheckCircle, label: t('approvals.title') },
+          { to: '/audit', icon: History, label: 'Audit History' },
+          { to: '/settings', icon: Settings, label: 'Farm Settings' },
+        ]
+      : []),
   ];
 
   return (

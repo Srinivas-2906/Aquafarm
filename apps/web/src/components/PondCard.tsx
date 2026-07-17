@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { cn, formatQty } from '@/lib/utils';
+import { EditTankNameButton } from '@/components/EditTankNameButton';
 
 interface PondCardProps {
   pond: PondTodayStatusDto;
@@ -19,8 +20,9 @@ export function PondCard({ pond }: PondCardProps) {
       )}
     >
       <div className="mb-2 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <h3 className="text-base font-bold text-primary leading-tight truncate">{pond.pondName}</h3>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <h3 className="text-base font-bold text-primary leading-tight truncate flex-1 min-w-0">{pond.pondName}</h3>
+          <EditTankNameButton pondId={pond.pondId} name={pond.pondName} code={pond.pondCode} />
           <span className="rounded-md bg-primary text-white text-[11px] font-bold px-2 py-0.5 shrink-0">
             #{pond.pondCode}
           </span>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { PRODUCT } from '@/config/product';
 import { useAuth } from '@/contexts/AuthContext';
@@ -115,6 +115,10 @@ export function LoginPage() {
 
         <p className="text-center mt-4 text-sm text-text-secondary">
           {t('login.forgotPinNoOtp', 'Forgot PIN? Contact your owner to reset it.')}
+        </p>
+
+        <p className="text-center mt-2 text-sm text-text-secondary">
+          Owner? <Link to="/signup" className="text-primary underline">Create account</Link>
         </p>
       </div>
     </div>

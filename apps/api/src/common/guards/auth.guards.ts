@@ -60,7 +60,17 @@ export class FarmAccessGuard implements CanActivate {
       request.body?.farmId ||
       (request.query.farmId as string);
 
-    if (!farmId) return true;
+    if (!farmId) {
+      throw new ForbiddenException('farmId is required');
+    }
+
+    const farm = await this.prisma.farm.findFirst({
+      where: { id: farmId, organizationId: request.user.organizationId },
+      select: { id: true },
+    });
+    if (!farm) {
+      throw new ForbiddenException('You do not have access to this farm');
+    }
 
     const access = await this.prisma.farmUser.findFirst({
       where: {
@@ -72,15 +82,6 @@ export class FarmAccessGuard implements CanActivate {
 
     if (!access && request.user.role !== UserRole.OWNER) {
       throw new ForbiddenException('You do not have access to this farm');
-    }
-
-    if (!access) {
-      const farm = await this.prisma.farm.findFirst({
-        where: { id: farmId, organizationId: request.user.organizationId },
-      });
-      if (!farm) {
-        throw new ForbiddenException('You do not have access to this farm');
-      }
     }
 
     return true;

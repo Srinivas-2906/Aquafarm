@@ -9,6 +9,13 @@ interface AuthContextType {
   selectedFarmId: string | null;
   setSelectedFarmId: (id: string) => void;
   login: (phone: string, pin: string) => Promise<void>;
+  signupOwner: (input: {
+    organizationName: string;
+    ownerName: string;
+    phoneNumber: string;
+    pin: string;
+    signupCode: string;
+  }) => Promise<void>;
   refreshMe: () => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -65,6 +72,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSelectedFarmId(null);
   }, []);
 
+  const signupOwner = useCallback(async (input: {
+    organizationName: string;
+    ownerName: string;
+    phoneNumber: string;
+    pin: string;
+    signupCode: string;
+  }) => {
+    const result = await authApi.signupOwner(input);
+    localStorage.setItem('accessToken', result.accessToken);
+    setUser(result.user);
+    await db.userProfile.put(result.user);
+    localStorage.removeItem('selectedFarmId');
+    setSelectedFarmId(null);
+  }, []);
+
   const refreshMe = useCallback(async () => {
     const token = localStorage.getItem('accessToken');
     if (!token) return;
@@ -98,6 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         selectedFarmId,
         setSelectedFarmId: handleSetFarm,
         login,
+        signupOwner,
         refreshMe,
         logout,
       }}

@@ -2,10 +2,9 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service';
 import { FeedingService } from '../feeding/feeding.service';
 import { parseDateOnly, sumDecimals } from '../common/utils/date.utils';
-import * as path from 'path';
-import * as fs from 'fs';
 import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
+import { PassThrough } from 'stream';
 
 @Injectable()
 export class ReportsService {
@@ -18,11 +17,18 @@ export class ReportsService {
     farmId: string;
     pondId?: string;
     feedProductId?: string;
+    feedProductIds?: string[];
     dateFrom: string;
     dateTo: string;
     userId: string;
     organizationId: string;
   }) {
+    const farmAccess = await this.prisma.farm.findFirst({
+      where: { id: filters.farmId, organizationId: filters.organizationId },
+      select: { id: true },
+    });
+    if (!farmAccess) throw new ForbiddenException('You do not have access to this farm');
+
     const where: Record<string, unknown> = {
       farmId: filters.farmId,
       status: { in: ['CONFIRMED', 'PENDING_OWNER_APPROVAL'] },
@@ -32,7 +38,17 @@ export class ReportsService {
       },
     };
     if (filters.pondId) where.pondId = filters.pondId;
-    if (filters.feedProductId) where.feedProductId = filters.feedProductId;
+    const feedIds = filters.feedProductIds?.length
+      ? filters.feedProductIds
+      : filters.feedProductId
+        ? [filters.feedProductId]
+        : [];
+    if (feedIds.length) {
+      where.OR = [
+        { feedProductId: { in: feedIds } },
+        { meals: { some: { feedProductId: { in: feedIds } } } },
+      ];
+    }
 
     const entries = await this.prisma.feedingEntry.findMany({
       where,
@@ -44,6 +60,12 @@ export class ReportsService {
       },
       orderBy: [{ feedingDate: 'asc' }, { pond: { code: 'asc' } }],
     });
+
+    const products = await this.prisma.feedProduct.findMany({
+      where: { farmId: filters.farmId, status: 'ACTIVE' },
+      select: { id: true, feedCode: true },
+    });
+    const codeById = new Map(products.map((p) => [p.id, p.feedCode]));
 
     const farm = await this.prisma.farm.findUnique({ where: { id: filters.farmId } });
     const pond = filters.pondId
@@ -58,6 +80,14 @@ export class ReportsService {
           e.feedingDate,
           ['CONFIRMED', 'PENDING_OWNER_APPROVAL'],
         );
+        const codes = new Set<string>();
+        codes.add(e.feedProduct.feedCode);
+        for (const m of e.meals) {
+          if (!m.feedProductId) continue;
+          const code = codeById.get(m.feedProductId);
+          if (code) codes.add(code);
+        }
+        const feedCode = codes.size <= 1 ? [...codes][0] : [...codes].sort().join(', ');
         const mealMap: Record<number, string> = {};
         e.meals.forEach((m) => {
           mealMap[m.mealNumber] = m.feedQuantityKg.toString();
@@ -65,7 +95,7 @@ export class ReportsService {
         return {
           date: e.feedingDate.toISOString().split('T')[0],
           doc: e.doc,
-          feedCode: e.feedProduct.feedCode,
+          feedCode,
           meal1: mealMap[1] || '',
           meal2: mealMap[2] || '',
           meal3: mealMap[3] || '',
@@ -80,22 +110,7 @@ export class ReportsService {
       }),
     );
 
-    const reportDir = path.join(process.cwd(), 'reports');
-    if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true });
-
     const reportId = crypto.randomUUID();
-    const pdfPath = path.join(reportDir, `${reportId}.pdf`);
-    const xlsxPath = path.join(reportDir, `${reportId}.xlsx`);
-
-    await this.generatePdf(pdfPath, {
-      farmName: farm?.name || 'Farm',
-      pondName: pond?.name,
-      dateFrom: filters.dateFrom,
-      dateTo: filters.dateTo,
-      rows,
-    });
-
-    await this.generateExcel(xlsxPath, rows);
 
     await this.prisma.generatedReport.create({
       data: {
@@ -104,7 +119,7 @@ export class ReportsService {
         farmId: filters.farmId,
         reportType: 'FEEDING_DATE_RANGE',
         filtersJson: filters as object,
-        filePath: pdfPath,
+        filePath: null,
         generatedByUserId: filters.userId,
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       },
@@ -135,9 +150,37 @@ export class ReportsService {
     return report;
   }
 
-  getReportFilePath(reportId: string, format: 'pdf' | 'excel'): string {
-    const ext = format === 'pdf' ? 'pdf' : 'xlsx';
-    return path.join(process.cwd(), 'reports', `${reportId}.${ext}`);
+  async renderReport(reportId: string, organizationId: string, format: 'pdf' | 'excel'): Promise<Buffer> {
+    const report = await this.getReport(reportId, organizationId);
+    if (report.reportType !== 'FEEDING_DATE_RANGE') {
+      throw new NotFoundException('Unsupported report type');
+    }
+
+    const filters = report.filtersJson as unknown as {
+      farmId: string;
+      pondId?: string;
+      feedProductId?: string;
+      feedProductIds?: string[];
+      dateFrom: string;
+      dateTo: string;
+    };
+
+    // Rebuild rows at download-time (Cloud Run disks are ephemeral).
+    const { farmName, pondName, rows } = await this.buildFeedingRows({
+      ...filters,
+      organizationId,
+    });
+
+    if (format === 'excel') {
+      return this.generateExcelBuffer(rows);
+    }
+    return this.generatePdfBuffer({
+      farmName,
+      pondName,
+      dateFrom: filters.dateFrom,
+      dateTo: filters.dateTo,
+      rows,
+    });
   }
 
   generateShareText(farmName: string, date: string, rows: Array<{ pondName: string; tdf: string }>, totalStock: string, pending: number) {
@@ -145,8 +188,109 @@ export class ReportsService {
     return `Daily Feeding Summary\nFarm: ${farmName}\nDate: ${date}\n\n${lines}\n\nTotal Feed: ${sumDecimals(rows.map((r) => r.tdf))} kg\nFeed Stock Remaining: ${totalStock} kg\nPending Entries: ${pending}`;
   }
 
-  private async generatePdf(
-    filePath: string,
+  private async buildFeedingRows(filters: {
+    farmId: string;
+    pondId?: string;
+    feedProductId?: string;
+    feedProductIds?: string[];
+    dateFrom: string;
+    dateTo: string;
+    organizationId: string;
+  }) {
+    const farmAccess = await this.prisma.farm.findFirst({
+      where: { id: filters.farmId, organizationId: filters.organizationId },
+      select: { id: true, name: true },
+    });
+    if (!farmAccess) throw new ForbiddenException('You do not have access to this farm');
+
+    const where: Record<string, unknown> = {
+      farmId: filters.farmId,
+      status: { in: ['CONFIRMED', 'PENDING_OWNER_APPROVAL'] },
+      feedingDate: {
+        gte: parseDateOnly(filters.dateFrom),
+        lte: parseDateOnly(filters.dateTo),
+      },
+    };
+    if (filters.pondId) where.pondId = filters.pondId;
+    const feedIds = filters.feedProductIds?.length
+      ? filters.feedProductIds
+      : filters.feedProductId
+        ? [filters.feedProductId]
+        : [];
+    if (feedIds.length) {
+      where.OR = [
+        { feedProductId: { in: feedIds } },
+        { meals: { some: { feedProductId: { in: feedIds } } } },
+      ];
+    }
+
+    const entries = await this.prisma.feedingEntry.findMany({
+      where,
+      include: {
+        meals: { orderBy: { mealNumber: 'asc' } },
+        pond: true,
+        feedProduct: true,
+        cultureCycle: true,
+      },
+      orderBy: [{ feedingDate: 'asc' }, { pond: { code: 'asc' } }],
+    });
+
+    const products = await this.prisma.feedProduct.findMany({
+      where: { farmId: filters.farmId, status: 'ACTIVE' },
+      select: { id: true, feedCode: true },
+    });
+    const codeById = new Map(products.map((p) => [p.id, p.feedCode]));
+
+    const pond = filters.pondId
+      ? await this.prisma.pond.findUnique({ where: { id: filters.pondId } })
+      : null;
+
+    const rows = await Promise.all(
+      entries.map(async (e) => {
+        const tdf = sumDecimals(e.meals.map((m) => m.feedQuantityKg));
+        const cumulative = await this.feeding.getCumulativeFeed(
+          e.cultureCycleId,
+          e.feedingDate,
+          ['CONFIRMED', 'PENDING_OWNER_APPROVAL'],
+        );
+        const codes = new Set<string>();
+        codes.add(e.feedProduct.feedCode);
+        for (const m of e.meals) {
+          if (!m.feedProductId) continue;
+          const code = codeById.get(m.feedProductId);
+          if (code) codes.add(code);
+        }
+        const feedCode = codes.size <= 1 ? [...codes][0] : [...codes].sort().join(', ');
+        const mealMap: Record<number, string> = {};
+        e.meals.forEach((m) => {
+          mealMap[m.mealNumber] = m.feedQuantityKg.toString();
+        });
+        return {
+          date: e.feedingDate.toISOString().split('T')[0],
+          doc: e.doc,
+          feedCode,
+          meal1: mealMap[1] || '',
+          meal2: mealMap[2] || '',
+          meal3: mealMap[3] || '',
+          meal4: mealMap[4] || '',
+          meal5: mealMap[5] || '',
+          tdf,
+          cumulative,
+          checkTray: e.meals.map((m) => m.checkTrayRemainingPercentage).filter(Boolean).join(', '),
+          remarks: e.remarks || '',
+          pondName: e.pond.name,
+        };
+      }),
+    );
+
+    return {
+      farmName: farmAccess.name || 'Farm',
+      pondName: pond?.name,
+      rows,
+    };
+  }
+
+  private async generatePdfBuffer(
     data: {
       farmName: string;
       pondName?: string;
@@ -155,9 +299,13 @@ export class ReportsService {
       rows: Array<Record<string, string | number>>;
     },
   ) {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<Buffer>((resolve, reject) => {
       const doc = new PDFDocument({ margin: 40, size: 'A4', layout: 'landscape' });
-      const stream = fs.createWriteStream(filePath);
+      const stream = new PassThrough();
+      const chunks: Buffer[] = [];
+      stream.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      stream.on('finish', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', reject);
       doc.pipe(stream);
 
       doc.fontSize(16).text('Feeding Management Report', { align: 'center' });
@@ -197,12 +345,10 @@ export class ReportsService {
 
       doc.fontSize(8).text(`Generated: ${new Date().toISOString()}`, 40, doc.page.height - 40);
       doc.end();
-      stream.on('finish', resolve);
-      stream.on('error', reject);
     });
   }
 
-  private async generateExcel(filePath: string, rows: Array<Record<string, string | number>>) {
+  private async generateExcelBuffer(rows: Array<Record<string, string | number>>): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Feeding Report');
 
@@ -233,6 +379,7 @@ export class ReportsService {
       });
     }
 
-    await workbook.xlsx.writeFile(filePath);
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as ArrayBuffer);
   }
 }
