@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException, BadRequestException, ForbiddenExcept
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import { timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { OtpService } from './otp.service';
 import { DEFAULTS } from '@aqualedger/config';
@@ -169,6 +170,118 @@ export class AuthService {
     });
 
     return { message: 'PIN updated successfully' };
+  }
+
+  async signupOwner(
+    input: {
+      organizationName: string;
+      ownerName: string;
+      phoneNumber: string;
+      pin: string;
+      signupCode: string;
+    },
+    userAgent?: string,
+    ipAddress?: string,
+  ) {
+    const configuredCode = this.config.get<string>('OWNER_SIGNUP_CODE') || process.env.OWNER_SIGNUP_CODE;
+    if (!configuredCode) {
+      throw new ForbiddenException('Owner signup is not enabled');
+    }
+
+    const codeOk =
+      input.signupCode.length === configuredCode.length &&
+      timingSafeEqual(Buffer.from(input.signupCode), Buffer.from(configuredCode));
+    if (!codeOk) {
+      throw new ForbiddenException('Invalid signup code');
+    }
+
+    const parsedLogin = loginSchema.safeParse({ phoneNumber: input.phoneNumber, pin: input.pin });
+    if (!parsedLogin.success) {
+      throw new BadRequestException(parsedLogin.error.errors[0]?.message || 'Invalid signup');
+    }
+    if (!input.organizationName?.trim() || input.organizationName.trim().length < 2) {
+      throw new BadRequestException('Organization name is required');
+    }
+    if (!input.ownerName?.trim() || input.ownerName.trim().length < 2) {
+      throw new BadRequestException('Owner name is required');
+    }
+
+    const existingOrgCount = await this.prisma.organization.count();
+    if (existingOrgCount > 0 && this.config.get('ALLOW_OWNER_SIGNUP_ON_EXISTING_ORG') !== 'true') {
+      throw new ForbiddenException('Owner signup is already completed for this deployment');
+    }
+
+    const pinHash = await bcrypt.hash(parsedLogin.data.pin, 12);
+
+    const { orgId, ownerId } = await this.prisma.$transaction(async (tx) => {
+      const org = await tx.organization.create({
+        data: {
+          name: input.organizationName.trim(),
+          timezone: 'Asia/Kolkata',
+          pondTerm: 'Tank',
+          status: 'ACTIVE',
+        },
+      });
+
+      const existingUser = await tx.user.findFirst({
+        where: { organizationId: org.id, phoneNumber: parsedLogin.data.phoneNumber },
+      });
+      if (existingUser) {
+        throw new BadRequestException('Phone number is already registered');
+      }
+
+      const owner = await tx.user.create({
+        data: {
+          organizationId: org.id,
+          phoneNumber: parsedLogin.data.phoneNumber,
+          displayName: input.ownerName.trim(),
+          role: 'OWNER',
+          pinHash,
+          status: 'ACTIVE',
+          mustChangePin: false,
+        },
+      });
+
+      // Create a starter farm so the owner can use the app immediately after signup.
+      const farm = await tx.farm.create({
+        data: {
+          organizationId: org.id,
+          name: 'My Farm',
+          timezone: org.timezone,
+          status: 'ACTIVE',
+        },
+      });
+
+      await tx.farmUser.create({
+        data: {
+          farmId: farm.id,
+          userId: owner.id,
+          role: 'OWNER',
+          status: 'ACTIVE',
+        },
+      });
+
+      return { orgId: org.id, ownerId: owner.id };
+    });
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: ownerId },
+      include: {
+        farmUsers: {
+          where: { status: 'ACTIVE' },
+          include: { farm: true },
+        },
+      },
+    });
+    if (!user) throw new UnauthorizedException();
+
+    const tokens = await this.createTokens(user.id, orgId, user.role, user.phoneNumber);
+    await this.createSession(user.id, tokens.refreshToken, userAgent, ipAddress);
+
+    return {
+      user: this.mapUser(user),
+      ...tokens,
+    };
   }
 
   async login(phoneNumber: string, pin: string, userAgent?: string, ipAddress?: string) {
