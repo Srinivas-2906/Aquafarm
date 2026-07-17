@@ -24,6 +24,9 @@ export class UsersController {
     @Body() body: { phoneNumber: string; displayName: string; farmId: string },
     @CurrentUser('organizationId') organizationId: string,
   ) {
+    if (process.env.NODE_ENV === 'production' && process.env.LEGACY_SUPERVISOR_ACTIVATION_ENABLED !== 'true') {
+      return { message: 'Supervisor activation flow is disabled. Use invite-supervisor instead.' };
+    }
     return this.users.createSupervisor(
       organizationId,
       body.farmId,
@@ -34,7 +37,7 @@ export class UsersController {
 
   @Post(':id/deactivate')
   @Roles(UserRole.OWNER)
-  async deactivate(@Param('id') id: string) {
-    return this.users.deactivate(id);
+  async deactivate(@Param('id') id: string, @CurrentUser('organizationId') organizationId: string) {
+    return this.users.deactivate(organizationId, id);
   }
 }

@@ -10,14 +10,14 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { FeedingService } from './feeding.service';
-import { JwtAuthGuard } from '../common/guards/auth.guards';
-import { CurrentUser } from '../common/decorators/auth.decorators';
+import { FarmAccessGuard, JwtAuthGuard } from '../common/guards/auth.guards';
+import { CurrentUser, RequireFarmAccess } from '../common/decorators/auth.decorators';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @ApiTags('feeding')
 @Controller('feeding-entries')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FarmAccessGuard)
 @ApiBearerAuth()
 export class FeedingController {
   constructor(
@@ -26,6 +26,7 @@ export class FeedingController {
   ) {}
 
   @Get()
+  @RequireFarmAccess()
   async findAll(
     @Query('farmId') farmId: string,
     @Query('pondId') pondId: string,
@@ -51,8 +52,13 @@ export class FeedingController {
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string, @CurrentUser('role') role: UserRole) {
-    return this.feeding.findOne(id, role);
+  async findOne(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.feeding.findOne(id, userId, role, organizationId);
   }
 
   @Patch(':id')
@@ -61,11 +67,13 @@ export class FeedingController {
     @Body() body: Record<string, unknown>,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: UserRole,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.feeding.updateEntry(id, body, userId, role);
+    return this.feeding.updateEntry(id, body, userId, role, organizationId);
   }
 
   @Post()
+  @RequireFarmAccess()
   async create(
     @Body() body: Record<string, unknown>,
     @CurrentUser('sub') userId: string,
@@ -81,8 +89,9 @@ export class FeedingController {
     @Body() meal: Record<string, unknown>,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: UserRole,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.feeding.addMeal(id, meal as never, userId, role);
+    return this.feeding.addMeal(id, meal as never, userId, role, organizationId);
   }
 
   @Patch(':id/meals/:mealId')
@@ -92,8 +101,9 @@ export class FeedingController {
     @Body() meal: Record<string, unknown>,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: UserRole,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.feeding.updateMeal(id, mealId, meal, userId, role);
+    return this.feeding.updateMeal(id, mealId, meal, userId, role, organizationId);
   }
 
   @Post(':id/void')
@@ -102,7 +112,8 @@ export class FeedingController {
     @Body('reason') reason: string,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: UserRole,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.feeding.void(id, reason, userId, role);
+    return this.feeding.void(id, reason, userId, role, organizationId);
   }
 }

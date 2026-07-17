@@ -34,6 +34,7 @@ export class FeedingService {
     input: Record<string, unknown>,
     userId: string,
     userRole: UserRole,
+    organizationId: string,
   ) {
     const feedProductId = input.feedProductId;
     if (typeof feedProductId !== 'string' || !feedProductId) {
@@ -45,6 +46,16 @@ export class FeedingService {
       include: { meals: true, farm: true, feedProduct: true, pond: true, enteredBy: true },
     });
     if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
+    if (userRole !== UserRole.OWNER) {
+      const access = await this.prisma.farmUser.findFirst({
+        where: { farmId: entry.farmId, userId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (!access) throw new ForbiddenException('You do not have access to this farm');
+    }
     if (entry.status === 'VOIDED') throw new BadRequestException('Cannot edit a voided entry');
 
     this.checkEditPermission(entry, userRole, entry.farm.timezone);
@@ -123,6 +134,9 @@ export class FeedingService {
 
     const farm = await this.prisma.farm.findUnique({ where: { id: data.farmId } });
     if (!farm) throw new NotFoundException('Farm not found');
+    if (farm.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have access to this farm');
+    }
 
     const cycle = await this.prisma.cultureCycle.findUnique({
       where: { id: data.cultureCycleId },
@@ -223,12 +237,23 @@ export class FeedingService {
     },
     userId: string,
     userRole: UserRole,
+    organizationId: string,
   ) {
     const entry = await this.prisma.feedingEntry.findUnique({
       where: { id: entryId },
       include: { meals: true, farm: true, pond: true, feedProduct: true, enteredBy: true },
     });
     if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
+    if (userRole !== UserRole.OWNER) {
+      const access = await this.prisma.farmUser.findFirst({
+        where: { farmId: entry.farmId, userId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (!access) throw new ForbiddenException('You do not have access to this farm');
+    }
     if (entry.status === 'VOIDED') {
       throw new BadRequestException('Cannot add meals to a voided entry');
     }
@@ -288,6 +313,7 @@ export class FeedingService {
     input: Record<string, unknown>,
     userId: string,
     userRole: UserRole,
+    organizationId: string,
   ) {
     const parsed = feedingMealUpdateSchema.safeParse(input);
     if (!parsed.success) {
@@ -300,6 +326,16 @@ export class FeedingService {
       include: { meals: true, farm: true, pond: true, feedProduct: true, enteredBy: true },
     });
     if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
+    if (userRole !== UserRole.OWNER) {
+      const access = await this.prisma.farmUser.findFirst({
+        where: { farmId: entry.farmId, userId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (!access) throw new ForbiddenException('You do not have access to this farm');
+    }
     if (entry.status === 'VOIDED') {
       throw new BadRequestException('Cannot edit meals on a voided entry');
     }
@@ -444,7 +480,7 @@ export class FeedingService {
     return { data: mapped, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
   }
 
-  async findOne(id: string, userRole: UserRole) {
+  async findOne(id: string, userId: string, userRole: UserRole, organizationId: string) {
     const entry = await this.prisma.feedingEntry.findUnique({
       where: { id },
       include: {
@@ -456,10 +492,20 @@ export class FeedingService {
       },
     });
     if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
+    if (userRole !== UserRole.OWNER) {
+      const access = await this.prisma.farmUser.findFirst({
+        where: { farmId: entry.farmId, userId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (!access) throw new ForbiddenException('You do not have access to this farm');
+    }
     return this.mapEntry(entry, userRole, entry.farm.timezone);
   }
 
-  async void(id: string, reason: string, userId: string, userRole: UserRole) {
+  async void(id: string, reason: string, userId: string, userRole: UserRole, organizationId: string) {
     if (userRole !== UserRole.OWNER) {
       throw new ForbiddenException('Only the owner can void entries');
     }
@@ -469,6 +515,9 @@ export class FeedingService {
       include: { meals: true, farm: true, pond: true, feedProduct: true, enteredBy: true },
     });
     if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
     if (entry.status === 'VOIDED') {
       throw new BadRequestException('Entry is already voided');
     }
