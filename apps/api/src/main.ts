@@ -26,15 +26,20 @@ async function bootstrap() {
   );
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  const config = new DocumentBuilder()
-    .setTitle(`${PRODUCT.name} API`)
-    .setDescription('Aquaculture feeding and inventory management API')
-    .setVersion(PRODUCT.version)
-    .addBearerAuth()
-    .addCookieAuth('access_token')
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  const swaggerEnabled =
+    process.env.SWAGGER_ENABLED === 'true' ||
+    (process.env.NODE_ENV !== 'production' && process.env.SWAGGER_ENABLED !== 'false');
+  if (swaggerEnabled) {
+    const config = new DocumentBuilder()
+      .setTitle(`${PRODUCT.name} API`)
+      .setDescription('Aquaculture feeding and inventory management API')
+      .setVersion(PRODUCT.version)
+      .addBearerAuth()
+      .addCookieAuth('access_token')
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+  }
 
   const port = process.env.PORT || process.env.API_PORT || 3001;
   await app.listen(port);

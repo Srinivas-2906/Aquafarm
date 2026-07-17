@@ -75,6 +75,7 @@ done
 
 CORS_ORIGIN="https://${DOMAIN_WEB}"
 ALLOWED_ORIGINS="${CORS_ORIGIN},https://${DOMAIN_API}"
+OWNER_SIGNUP_CODE="${OWNER_SIGNUP_CODE:-}"
 
 echo "==> Deploying API (${SERVICE_API})"
 gcloud run deploy "$SERVICE_API" \
@@ -88,7 +89,7 @@ gcloud run deploy "$SERVICE_API" \
   --max-instances 3 \
   --add-cloudsql-instances "${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
   --set-secrets "DATABASE_URL=aquafarm_database_url:latest,JWT_SECRET=aquafarm_jwt_secret:latest,JWT_REFRESH_SECRET=aquafarm_jwt_refresh_secret:latest" \
-  --set-env-vars "NODE_ENV=production,CORS_ORIGIN=${CORS_ORIGIN},COOKIE_SECURE=true,OTP_MOCK_ENABLED=false,API_PORT=8080"
+  --set-env-vars "NODE_ENV=production,CORS_ORIGIN=${CORS_ORIGIN},COOKIE_SECURE=true,OTP_MOCK_ENABLED=false,API_PORT=8080,SWAGGER_ENABLED=false,DEBUG_ENABLED=false,AUTH_ACTIVATION_ENABLED=false,AUTH_OTP_ENABLED=false,OWNER_SIGNUP_CODE=${OWNER_SIGNUP_CODE}"
 
 API_URL="$(gcloud run services describe "$SERVICE_API" --region "$REGION" --format='value(status.url)')"
 
@@ -155,26 +156,31 @@ if ! gcloud compute url-maps describe "$URL_MAP" --format=yaml | grep -q "${DOMA
     --path-matcher-name=aquafarm-api
 fi
 
-echo "==> Seeding database (one-time, safe to re-run)"
-if gcloud run jobs describe aquafarm-seed --region "$REGION" >/dev/null 2>&1; then
-  gcloud run jobs update aquafarm-seed \
-    --image "$API_IMAGE" \
-    --region "$REGION" \
-    --add-cloudsql-instances "${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
-    --set-secrets "DATABASE_URL=aquafarm_database_url:latest" \
-    --command "tsx" \
-    --args "apps/api/prisma/seed.ts" || true
-else
-  gcloud run jobs create aquafarm-seed \
-    --image "$API_IMAGE" \
-    --region "$REGION" \
-    --add-cloudsql-instances "${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
-    --set-secrets "DATABASE_URL=aquafarm_database_url:latest" \
-    --command "tsx" \
-    --args "apps/api/prisma/seed.ts" || true
-fi
+RUN_DEMO_SEED="${RUN_DEMO_SEED:-false}"
+if [[ "$RUN_DEMO_SEED" == "true" ]]; then
+  echo "==> Seeding database (DEMO ONLY)"
+  if gcloud run jobs describe aquafarm-seed --region "$REGION" >/dev/null 2>&1; then
+    gcloud run jobs update aquafarm-seed \
+      --image "$API_IMAGE" \
+      --region "$REGION" \
+      --add-cloudsql-instances "${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
+      --set-secrets "DATABASE_URL=aquafarm_database_url:latest" \
+      --command "tsx" \
+      --args "apps/api/prisma/seed.ts" || true
+  else
+    gcloud run jobs create aquafarm-seed \
+      --image "$API_IMAGE" \
+      --region "$REGION" \
+      --add-cloudsql-instances "${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
+      --set-secrets "DATABASE_URL=aquafarm_database_url:latest" \
+      --command "tsx" \
+      --args "apps/api/prisma/seed.ts" || true
+  fi
 
-gcloud run jobs execute aquafarm-seed --region "$REGION" --wait || echo "Seed job skipped/failed (may already be seeded)"
+  gcloud run jobs execute aquafarm-seed --region "$REGION" --wait || echo "Seed job skipped/failed"
+else
+  echo "==> Skipping demo seed (set RUN_DEMO_SEED=true to run)"
+fi
 
 cat <<EOF
 
@@ -187,9 +193,4 @@ API domain:      https://${DOMAIN_API}
 
 DNS for ${DOMAIN_WEB} should point to the Kaana load balancer IP (34.36.130.96).
 SSL cert provisioning may take up to 30 minutes on first deploy.
-
-Demo login:
-  Owner 1:    9985533376 / 123456
-  Owner 2:    9008747926 / 123456
-  Supervisor: 9111111111 / 123456
 EOF

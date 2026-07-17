@@ -116,6 +116,9 @@ See `.env.example` for all variables:
 | `CORS_ORIGIN` | Frontend origin (default http://localhost:5173) |
 | `VITE_API_URL` | API URL for frontend |
 | `OTP_MOCK_ENABLED` | Use mock OTP in development |
+| `OWNER_SIGNUP_CODE` | Enables `POST /auth/signup-owner` (owner-only signup) |
+| `SWAGGER_ENABLED` | Enable Swagger UI (`/api/docs`) |
+| `DEBUG_ENABLED` | Enable debug endpoints (development only) |
 
 ## Commands
 
@@ -134,7 +137,7 @@ npm run db:studio    # Open Prisma Studio
 
 ## API Documentation
 
-Swagger UI: http://localhost:3001/api/docs
+Swagger UI (when enabled): http://localhost:3001/api/docs
 
 Key endpoints:
 - `POST /auth/login` — Phone + PIN login
@@ -172,6 +175,10 @@ chmod +x scripts/deploy-gcp.sh
 ```
 
 Production URL: https://aquafarm.kaana.in
+
+Notes:
+- Demo seed is **disabled by default** in `scripts/deploy-gcp.sh`. To run demo seed: `RUN_DEMO_SEED=true ./scripts/deploy-gcp.sh`
+- Owner signup is enabled by passing `OWNER_SIGNUP_CODE` when deploying, e.g. `OWNER_SIGNUP_CODE='your-secret-code' ./scripts/deploy-gcp.sh`
 
 ## Docker Production Build
 
