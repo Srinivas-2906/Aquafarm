@@ -91,6 +91,35 @@ class SetPinDto {
   newPin!: string;
 }
 
+class OwnerSignupDto {
+  @ApiProperty({ example: 'Sandhya Aqua Farms' })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(200)
+  organizationName!: string;
+
+  @ApiProperty({ example: 'Owner Name' })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  ownerName!: string;
+
+  @ApiProperty({ example: '9985533376' })
+  @IsString()
+  @Matches(/^[6-9]\d{9}$/)
+  phoneNumber!: string;
+
+  @ApiProperty({ example: '123456' })
+  @IsString()
+  @Matches(/^\d{6}$/)
+  pin!: string;
+
+  @ApiProperty({ example: 'PILOT-OWNER-SIGNUP-CODE' })
+  @IsString()
+  @MinLength(6)
+  signupCode!: string;
+}
+
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
@@ -118,17 +147,29 @@ export class AuthController {
   }
 
   @Post('activate')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   async activate(@Body() dto: ActivateDto) {
+    if (process.env.NODE_ENV === 'production' && process.env.AUTH_ACTIVATION_ENABLED !== 'true') {
+      return { message: 'Activation is disabled' };
+    }
     return this.auth.activate(dto.phoneNumber, dto.activationCode, dto.pin, dto.displayName);
   }
 
   @Post('request-otp')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   async requestOtp(@Body() dto: RequestOtpDto) {
+    if (process.env.NODE_ENV === 'production' && process.env.AUTH_OTP_ENABLED !== 'true') {
+      return { message: 'OTP is disabled' };
+    }
     return this.auth.requestOtp(dto.phoneNumber);
   }
 
   @Post('reset-pin')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   async resetPin(@Body() dto: ResetPinDto) {
+    if (process.env.NODE_ENV === 'production' && process.env.AUTH_OTP_ENABLED !== 'true') {
+      return { message: 'OTP reset is disabled' };
+    }
     return this.auth.resetPin(dto.phoneNumber, dto.otp, dto.newPin);
   }
 
@@ -175,6 +216,19 @@ export class AuthController {
   @ApiBearerAuth()
   async setPin(@Body() dto: SetPinDto, @CurrentUser('sub') userId: string) {
     return this.auth.setPin(userId, dto.newPin);
+  }
+
+  @Post('signup-owner')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @HttpCode(200)
+  async signupOwner(
+    @Body() dto: OwnerSignupDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.auth.signupOwner(dto, req.headers['user-agent'], req.ip);
+    this.setAuthCookies(res, result.accessToken, result.refreshToken);
+    return { user: result.user, accessToken: result.accessToken };
   }
 
   private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {

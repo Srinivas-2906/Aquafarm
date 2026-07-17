@@ -6,12 +6,12 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async onModuleInit() {
     await this.$connect();
 
-    // Ensure DB stays compatible with evolving Prisma schema in dev.
-    // (Some environments run without `prisma migrate`, causing runtime errors.)
-    await this.$executeRawUnsafe(
-      'ALTER TABLE "FeedingMeal" ADD COLUMN IF NOT EXISTS "feedProductId" TEXT;',
-    );
-    await this.$executeRawUnsafe(`
+    // Development-only safety net: some local environments run without migrations.
+    if (process.env.NODE_ENV !== 'production') {
+      await this.$executeRawUnsafe(
+        'ALTER TABLE "FeedingMeal" ADD COLUMN IF NOT EXISTS "feedProductId" TEXT;',
+      );
+      await this.$executeRawUnsafe(`
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -21,13 +21,14 @@ BEGIN
       FOREIGN KEY ("feedProductId") REFERENCES "FeedProduct"("id") ON DELETE SET NULL ON UPDATE CASCADE;
   END IF;
 END $$;
-    `);
-    await this.$executeRawUnsafe(`
+      `);
+      await this.$executeRawUnsafe(`
 UPDATE "FeedingMeal" m
 SET "feedProductId" = e."feedProductId"
 FROM "FeedingEntry" e
 WHERE m."feedingEntryId" = e."id" AND m."feedProductId" IS NULL;
-    `);
+      `);
+    }
   }
 
   async onModuleDestroy() {

@@ -7,25 +7,24 @@ import {
   Query,
   Res,
   UseGuards,
-  NotFoundException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { Response } from 'express';
-import * as fs from 'fs';
 import { ReportsService } from './reports.service';
-import { JwtAuthGuard, RolesGuard } from '../common/guards/auth.guards';
-import { Roles, CurrentUser } from '../common/decorators/auth.decorators';
+import { FarmAccessGuard, JwtAuthGuard, RolesGuard } from '../common/guards/auth.guards';
+import { RequireFarmAccess, Roles, CurrentUser } from '../common/decorators/auth.decorators';
 import { UserRole } from '@prisma/client';
 
 @ApiTags('reports')
 @Controller('reports')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, FarmAccessGuard)
 @Roles(UserRole.OWNER)
 @ApiBearerAuth()
 export class ReportsController {
   constructor(private reports: ReportsService) {}
 
   @Post('generate')
+  @RequireFarmAccess()
   async generate(
     @Body() body: {
       farmId: string;
@@ -62,10 +61,6 @@ export class ReportsController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     await this.reports.getReport(id, organizationId);
-    const filePath = this.reports.getReportFilePath(id, format);
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException('Report file not found');
-    }
     const contentType =
       format === 'pdf'
         ? 'application/pdf'
@@ -73,6 +68,8 @@ export class ReportsController {
     const filename = `feeding-report-${id}.${format === 'pdf' ? 'pdf' : 'xlsx'}`;
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    fs.createReadStream(filePath).pipe(res);
+
+    const buffer = await this.reports.renderReport(id, organizationId, format);
+    res.send(buffer);
   }
 }

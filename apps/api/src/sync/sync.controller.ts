@@ -1,13 +1,13 @@
 import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { SyncService } from './sync.service';
-import { JwtAuthGuard } from '../common/guards/auth.guards';
-import { CurrentUser } from '../common/decorators/auth.decorators';
+import { FarmAccessGuard, JwtAuthGuard } from '../common/guards/auth.guards';
+import { CurrentUser, RequireFarmAccess } from '../common/decorators/auth.decorators';
 import { UserRole } from '@prisma/client';
 
 @ApiTags('sync')
 @Controller('sync')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FarmAccessGuard)
 @ApiBearerAuth()
 export class SyncController {
   constructor(private sync: SyncService) {}
@@ -23,6 +23,7 @@ export class SyncController {
   }
 
   @Get('status')
+  @RequireFarmAccess()
   async status(
     @Query('farmId') farmId: string,
     @CurrentUser('sub') userId: string,

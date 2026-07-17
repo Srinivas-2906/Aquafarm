@@ -15,6 +15,7 @@ import { InviteSupervisorPage } from '@/pages/InviteSupervisorPage';
 import { MorePage, AuditPage, SettingsPage, ResetPinPage } from '@/pages/MorePage';
 import { NetPage } from '@/pages/NetPage';
 import { SetPinPage } from '@/pages/SetPinPage';
+import { OwnerSignupPage } from '@/pages/OwnerSignupPage';
 import { UserRole } from '@/types/roles';
 
 const queryClient = new QueryClient({
@@ -64,6 +65,7 @@ export function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/signup" element={<OwnerSignupPage />} />
             <Route path="/reset-pin" element={<ResetPinPage />} />
             <Route
               path="/set-pin"

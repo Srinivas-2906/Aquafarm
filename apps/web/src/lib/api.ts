@@ -85,6 +85,17 @@ export const authApi = {
       '/auth/login',
       { phoneNumber, pin },
     ),
+  signupOwner: (input: {
+    organizationName: string;
+    ownerName: string;
+    phoneNumber: string;
+    pin: string;
+    signupCode: string;
+  }) =>
+    api.post<{ user: import('@aqualedger/contracts').AuthUser; accessToken: string }>(
+      '/auth/signup-owner',
+      input,
+    ),
   me: () => api.get<import('@aqualedger/contracts').AuthUser>('/auth/me'),
   logout: () => api.post('/auth/logout'),
   requestOtp: (phoneNumber: string) => api.post('/auth/request-otp', { phoneNumber }),

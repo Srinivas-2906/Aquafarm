@@ -48,7 +48,7 @@ import { DebugModule } from './debug/debug.module';
     SyncModule,
     ApprovalsModule,
     DashboardModule,
-    DebugModule,
+    ...(process.env.DEBUG_ENABLED === 'true' && process.env.NODE_ENV !== 'production' ? [DebugModule] : []),
   ],
   providers: [
     {
