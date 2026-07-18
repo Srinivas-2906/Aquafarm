@@ -137,22 +137,39 @@ if ! gcloud compute target-https-proxies describe "$PROXY" --format='value(sslCe
 fi
 
 URL_MAP="kaana-web-map-multi"
-if ! gcloud compute url-maps describe "$URL_MAP" --format=yaml | grep -q "${DOMAIN_WEB}"; then
+refresh_url_map_yaml() {
+  gcloud compute url-maps describe "$URL_MAP" --format=yaml
+}
+URL_MAP_YAML="$(refresh_url_map_yaml)"
+
+# A URL map path matcher must be referenced by a host rule. If the matcher does not
+# exist yet, create it and attach a host rule in one step using --new-hosts.
+if ! printf '%s' "$URL_MAP_YAML" | grep -q "name: aquafarm-web"; then
   gcloud compute url-maps add-path-matcher "$URL_MAP" \
     --path-matcher-name=aquafarm-web \
-    --default-service="${SERVICE_WEB}-backend"
+    --default-service="${SERVICE_WEB}-backend" \
+    --new-hosts="${DOMAIN_WEB}"
+  URL_MAP_YAML="$(refresh_url_map_yaml)"
+fi
+if ! printf '%s' "$URL_MAP_YAML" | grep -q "${DOMAIN_WEB}"; then
   gcloud compute url-maps add-host-rule "$URL_MAP" \
     --hosts="${DOMAIN_WEB}" \
     --path-matcher-name=aquafarm-web
+  URL_MAP_YAML="$(refresh_url_map_yaml)"
 fi
 
-if ! gcloud compute url-maps describe "$URL_MAP" --format=yaml | grep -q "${DOMAIN_API}"; then
+if ! printf '%s' "$URL_MAP_YAML" | grep -q "name: aquafarm-api"; then
   gcloud compute url-maps add-path-matcher "$URL_MAP" \
     --path-matcher-name=aquafarm-api \
-    --default-service="${SERVICE_API}-backend"
+    --default-service="${SERVICE_API}-backend" \
+    --new-hosts="${DOMAIN_API}"
+  URL_MAP_YAML="$(refresh_url_map_yaml)"
+fi
+if ! printf '%s' "$URL_MAP_YAML" | grep -q "${DOMAIN_API}"; then
   gcloud compute url-maps add-host-rule "$URL_MAP" \
     --hosts="${DOMAIN_API}" \
     --path-matcher-name=aquafarm-api
+  URL_MAP_YAML="$(refresh_url_map_yaml)"
 fi
 
 RUN_DEMO_SEED="${RUN_DEMO_SEED:-false}"
