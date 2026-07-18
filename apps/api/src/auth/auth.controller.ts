@@ -1,6 +1,6 @@
 import { Body, Controller, Post, Get, Res, Req, UseGuards, HttpCode } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiProperty } from '@nestjs/swagger';
-import { IsString, Matches, MinLength, MaxLength, Length } from 'class-validator';
+import { IsString, Matches, MinLength, MaxLength, Length, IsOptional } from 'class-validator';
 import { Response, Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
@@ -114,10 +114,23 @@ class OwnerSignupDto {
   @Matches(/^\d{6}$/)
   pin!: string;
 
-  @ApiProperty({ example: 'PILOT-OWNER-SIGNUP-CODE' })
+  @ApiProperty({ example: '123456' })
   @IsString()
-  @MinLength(6)
-  signupCode!: string;
+  @Matches(/^\d{6}$/)
+  confirmPin!: string;
+}
+
+class PinResetRequestDto {
+  @ApiProperty({ example: '9985533376' })
+  @IsString()
+  @Matches(/^[6-9]\d{9}$/)
+  phoneNumber!: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  message?: string;
 }
 
 @ApiTags('auth')
@@ -229,6 +242,13 @@ export class AuthController {
     const result = await this.auth.signupOwner(dto, req.headers['user-agent'], req.ip);
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
     return { user: result.user, accessToken: result.accessToken };
+  }
+
+  @Post('pin-reset-request')
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  @HttpCode(200)
+  async pinResetRequest(@Body() dto: PinResetRequestDto) {
+    return this.auth.requestPinReset(dto.phoneNumber, dto.message);
   }
 
   private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {

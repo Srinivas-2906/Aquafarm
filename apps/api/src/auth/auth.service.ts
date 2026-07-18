@@ -2,7 +2,6 @@ import { Injectable, UnauthorizedException, BadRequestException, ForbiddenExcept
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
-import { timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { OtpService } from './otp.service';
 import { DEFAULTS } from '@aqualedger/config';
@@ -178,21 +177,13 @@ export class AuthService {
       ownerName: string;
       phoneNumber: string;
       pin: string;
-      signupCode: string;
+      confirmPin: string;
     },
     userAgent?: string,
     ipAddress?: string,
   ) {
-    const configuredCode = this.config.get<string>('OWNER_SIGNUP_CODE') || process.env.OWNER_SIGNUP_CODE;
-    if (!configuredCode) {
-      throw new ForbiddenException('Owner signup is not enabled');
-    }
-
-    const codeOk =
-      input.signupCode.length === configuredCode.length &&
-      timingSafeEqual(Buffer.from(input.signupCode), Buffer.from(configuredCode));
-    if (!codeOk) {
-      throw new ForbiddenException('Invalid signup code');
+    if (input.pin !== input.confirmPin) {
+      throw new BadRequestException('PIN and confirm PIN do not match');
     }
 
     const parsedLogin = loginSchema.safeParse({ phoneNumber: input.phoneNumber, pin: input.pin });
@@ -281,6 +272,23 @@ export class AuthService {
     return {
       user: this.mapUser(user),
       ...tokens,
+    };
+  }
+
+  async requestPinReset(phoneNumber: string, message?: string) {
+    if (!/^[6-9]\d{9}$/.test(phoneNumber)) {
+      throw new BadRequestException('Enter a valid 10-digit phone number');
+    }
+
+    await this.prisma.pinResetRequest.create({
+      data: {
+        phoneNumber,
+        message: message?.trim() || null,
+      },
+    });
+
+    return {
+      message: 'Request submitted. Admin will reset your PIN and contact you shortly.',
     };
   }
 

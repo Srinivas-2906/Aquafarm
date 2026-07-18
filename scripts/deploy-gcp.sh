@@ -75,7 +75,6 @@ done
 
 CORS_ORIGIN="https://${DOMAIN_WEB}"
 ALLOWED_ORIGINS="${CORS_ORIGIN},https://${DOMAIN_API}"
-OWNER_SIGNUP_CODE="${OWNER_SIGNUP_CODE:-}"
 
 echo "==> Deploying API (${SERVICE_API})"
 gcloud run deploy "$SERVICE_API" \
@@ -89,7 +88,7 @@ gcloud run deploy "$SERVICE_API" \
   --max-instances 3 \
   --add-cloudsql-instances "${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
   --set-secrets "DATABASE_URL=aquafarm_database_url:latest,JWT_SECRET=aquafarm_jwt_secret:latest,JWT_REFRESH_SECRET=aquafarm_jwt_refresh_secret:latest" \
-  --set-env-vars "NODE_ENV=production,CORS_ORIGIN=${CORS_ORIGIN},COOKIE_SECURE=true,OTP_MOCK_ENABLED=false,API_PORT=8080,SWAGGER_ENABLED=false,DEBUG_ENABLED=false,AUTH_ACTIVATION_ENABLED=false,AUTH_OTP_ENABLED=false,OWNER_SIGNUP_CODE=${OWNER_SIGNUP_CODE}"
+  --set-env-vars "NODE_ENV=production,CORS_ORIGIN=${CORS_ORIGIN},COOKIE_SECURE=true,OTP_MOCK_ENABLED=false,API_PORT=8080,SWAGGER_ENABLED=false,DEBUG_ENABLED=false,AUTH_ACTIVATION_ENABLED=false,AUTH_OTP_ENABLED=false"
 
 API_URL="$(gcloud run services describe "$SERVICE_API" --region "$REGION" --format='value(status.url)')"
 

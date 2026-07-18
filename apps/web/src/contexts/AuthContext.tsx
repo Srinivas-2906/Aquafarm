@@ -14,7 +14,7 @@ interface AuthContextType {
     ownerName: string;
     phoneNumber: string;
     pin: string;
-    signupCode: string;
+    confirmPin: string;
   }) => Promise<void>;
   refreshMe: () => Promise<void>;
   logout: () => Promise<void>;
@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ownerName: string;
     phoneNumber: string;
     pin: string;
-    signupCode: string;
+    confirmPin: string;
   }) => {
     const result = await authApi.signupOwner(input);
     localStorage.setItem('accessToken', result.accessToken);
