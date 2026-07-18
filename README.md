@@ -116,7 +116,6 @@ See `.env.example` for all variables:
 | `CORS_ORIGIN` | Frontend origin (default http://localhost:5173) |
 | `VITE_API_URL` | API URL for frontend |
 | `OTP_MOCK_ENABLED` | Use mock OTP in development |
-| `OWNER_SIGNUP_CODE` | Enables `POST /auth/signup-owner` (owner-only signup) |
 | `SWAGGER_ENABLED` | Enable Swagger UI (`/api/docs`) |
 | `DEBUG_ENABLED` | Enable debug endpoints (development only) |
 
@@ -178,7 +177,8 @@ Production URL: https://aquafarm.kaana.in
 
 Notes:
 - Demo seed is **disabled by default** in `scripts/deploy-gcp.sh`. To run demo seed: `RUN_DEMO_SEED=true ./scripts/deploy-gcp.sh`
-- Owner signup is enabled by passing `OWNER_SIGNUP_CODE` when deploying, e.g. `OWNER_SIGNUP_CODE='your-secret-code' ./scripts/deploy-gcp.sh`
+- Owner signup: `/signup` (PIN + confirm PIN). Only the first organization can sign up unless `ALLOW_OWNER_SIGNUP_ON_EXISTING_ORG=true`.
+- Forgot PIN: `/reset-pin` submits a request for admin to reset.
 
 ## Docker Production Build
 

@@ -114,7 +114,9 @@ export function LoginPage() {
         </form>
 
         <p className="text-center mt-4 text-sm text-text-secondary">
-          {t('login.forgotPinNoOtp', 'Forgot PIN? Contact your owner to reset it.')}
+          <Link to="/reset-pin" className="text-primary underline">
+            {t('login.forgotPin', 'Forgot PIN?')}
+          </Link>
         </p>
 
         <p className="text-center mt-2 text-sm text-text-secondary">

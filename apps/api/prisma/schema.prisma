@@ -498,3 +498,14 @@ model GeneratedReport {
 
   @@index([farmId, createdAt])
 }
+
+model PinResetRequest {
+  id          String   @id @default(uuid())
+  phoneNumber String
+  message     String?
+  status      String   @default("PENDING")
+  createdAt   DateTime @default(now())
+
+  @@index([status, createdAt])
+  @@index([phoneNumber])
+}

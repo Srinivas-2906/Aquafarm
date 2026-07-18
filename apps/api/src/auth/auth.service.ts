@@ -2,7 +2,6 @@ import { Injectable, UnauthorizedException, BadRequestException, ForbiddenExcept
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
-import { timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { OtpService } from './otp.service';
 import { DEFAULTS } from '@aqualedger/config';
@@ -178,21 +177,13 @@ export class AuthService {
       ownerName: string;
       phoneNumber: string;
       pin: string;
-      signupCode: string;
+      confirmPin: string;
     },
     userAgent?: string,
     ipAddress?: string,
   ) {
-    const configuredCode = this.config.get<string>('OWNER_SIGNUP_CODE') || process.env.OWNER_SIGNUP_CODE;
-    if (!configuredCode) {
-      throw new ForbiddenException('Owner signup is not enabled');
-    }
-
-    const codeOk =
-      input.signupCode.length === configuredCode.length &&
-      timingSafeEqual(Buffer.from(input.signupCode), Buffer.from(configuredCode));
-    if (!codeOk) {
-      throw new ForbiddenException('Invalid signup code');
+    if (input.pin !== input.confirmPin) {
+      throw new BadRequestException('PIN and confirm PIN do not match');
     }
 
     const parsedLogin = loginSchema.safeParse({ phoneNumber: input.phoneNumber, pin: input.pin });
@@ -206,9 +197,23 @@ export class AuthService {
       throw new BadRequestException('Owner name is required');
     }
 
+    const allowExistingOrg =
+      this.config.get('ALLOW_OWNER_SIGNUP_ON_EXISTING_ORG') === 'true' ||
+      this.config.get('NODE_ENV') !== 'production';
+
     const existingOrgCount = await this.prisma.organization.count();
-    if (existingOrgCount > 0 && this.config.get('ALLOW_OWNER_SIGNUP_ON_EXISTING_ORG') !== 'true') {
-      throw new ForbiddenException('Owner signup is already completed for this deployment');
+    if (existingOrgCount > 0 && !allowExistingOrg) {
+      throw new ForbiddenException('An organization already exists. Please log in instead.');
+    }
+
+    const phoneInUse = await this.prisma.user.findFirst({
+      where: {
+        phoneNumber: parsedLogin.data.phoneNumber,
+        status: { in: ['ACTIVE', 'PENDING_ACTIVATION'] },
+      },
+    });
+    if (phoneInUse) {
+      throw new BadRequestException('This phone number is already registered. Try logging in.');
     }
 
     const pinHash = await bcrypt.hash(parsedLogin.data.pin, 12);
@@ -222,13 +227,6 @@ export class AuthService {
           status: 'ACTIVE',
         },
       });
-
-      const existingUser = await tx.user.findFirst({
-        where: { organizationId: org.id, phoneNumber: parsedLogin.data.phoneNumber },
-      });
-      if (existingUser) {
-        throw new BadRequestException('Phone number is already registered');
-      }
 
       const owner = await tx.user.create({
         data: {
@@ -281,6 +279,23 @@ export class AuthService {
     return {
       user: this.mapUser(user),
       ...tokens,
+    };
+  }
+
+  async requestPinReset(phoneNumber: string, message?: string) {
+    if (!/^[6-9]\d{9}$/.test(phoneNumber)) {
+      throw new BadRequestException('Enter a valid 10-digit phone number');
+    }
+
+    await this.prisma.pinResetRequest.create({
+      data: {
+        phoneNumber,
+        message: message?.trim() || null,
+      },
+    });
+
+    return {
+      message: 'Request submitted. Admin will reset your PIN and contact you shortly.',
     };
   }
 
