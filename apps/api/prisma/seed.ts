@@ -203,7 +203,7 @@ async function main() {
   const defaultFeedCodes = [
     { code: '1C', pelletSize: '1.2mm', lowStock: 100, openingKg: 500 },
     { code: '2C', pelletSize: '1.5mm', lowStock: 100, openingKg: 500 },
-    { code: '20', pelletSize: '2.0mm', lowStock: 100, openingKg: 500 },
+    { code: '2P', pelletSize: '2.0mm', lowStock: 100, openingKg: 500 },
     { code: '3S', pelletSize: '2.0mm', lowStock: 100, openingKg: 500 },
     { code: '3SP', pelletSize: '2.0mm', lowStock: 100, openingKg: 500 },
     { code: '3P', pelletSize: '2.0mm', lowStock: 200, openingKg: 150 },
