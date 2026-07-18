@@ -32,6 +32,15 @@ export class HttpExceptionFilter implements ExceptionFilter {
         }
         error = resp.error as string | undefined;
       }
+    } else if (exception && typeof exception === 'object' && 'code' in exception) {
+      const prismaError = exception as { code?: string; meta?: { cause?: string } };
+      if (prismaError.code === 'P1001') {
+        status = HttpStatus.SERVICE_UNAVAILABLE;
+        message = 'Database is unavailable. Please try again shortly.';
+      } else if (prismaError.code === 'P2021' || prismaError.code === 'P2022') {
+        status = HttpStatus.SERVICE_UNAVAILABLE;
+        message = 'Database schema is out of date. Run migrations and restart the API.';
+      }
     }
 
     if (status === HttpStatus.INTERNAL_SERVER_ERROR) {

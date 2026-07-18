@@ -197,9 +197,23 @@ export class AuthService {
       throw new BadRequestException('Owner name is required');
     }
 
+    const allowExistingOrg =
+      this.config.get('ALLOW_OWNER_SIGNUP_ON_EXISTING_ORG') === 'true' ||
+      this.config.get('NODE_ENV') !== 'production';
+
     const existingOrgCount = await this.prisma.organization.count();
-    if (existingOrgCount > 0 && this.config.get('ALLOW_OWNER_SIGNUP_ON_EXISTING_ORG') !== 'true') {
-      throw new ForbiddenException('Owner signup is already completed for this deployment');
+    if (existingOrgCount > 0 && !allowExistingOrg) {
+      throw new ForbiddenException('An organization already exists. Please log in instead.');
+    }
+
+    const phoneInUse = await this.prisma.user.findFirst({
+      where: {
+        phoneNumber: parsedLogin.data.phoneNumber,
+        status: { in: ['ACTIVE', 'PENDING_ACTIVATION'] },
+      },
+    });
+    if (phoneInUse) {
+      throw new BadRequestException('This phone number is already registered. Try logging in.');
     }
 
     const pinHash = await bcrypt.hash(parsedLogin.data.pin, 12);
@@ -213,13 +227,6 @@ export class AuthService {
           status: 'ACTIVE',
         },
       });
-
-      const existingUser = await tx.user.findFirst({
-        where: { organizationId: org.id, phoneNumber: parsedLogin.data.phoneNumber },
-      });
-      if (existingUser) {
-        throw new BadRequestException('Phone number is already registered');
-      }
 
       const owner = await tx.user.create({
         data: {
