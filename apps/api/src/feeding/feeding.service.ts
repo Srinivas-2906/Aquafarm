@@ -265,12 +265,26 @@ export class FeedingService {
       throw new ConflictException(`Meal ${meal.mealNumber} already exists`);
     }
 
+    let feedProductId = meal.feedProductId ?? entry.feedProductId;
+    if (meal.feedProductId) {
+      const product = await this.prisma.feedProduct.findFirst({
+        where: {
+          id: meal.feedProductId,
+          farmId: entry.farmId,
+          organizationId,
+          status: 'ACTIVE',
+        },
+      });
+      if (!product) throw new BadRequestException('Select a valid feed code');
+      feedProductId = product.id;
+    }
+
     await this.prisma.feedingMeal.create({
       data: {
         feedingEntryId: entryId,
         mealNumber: meal.mealNumber,
         feedQuantityKg: meal.feedQuantityKg,
-        feedProductId: meal.feedProductId ?? entry.feedProductId,
+        feedProductId,
         actualTime: meal.actualTime || new Date().toTimeString().slice(0, 5),
         checkTrayRemainingPercentage: meal.checkTrayRemainingPercentage as never,
         appetiteStatus: meal.appetiteStatus as never,
@@ -353,16 +367,34 @@ export class FeedingService {
       remarks: meal.remarks,
     };
 
+    const mealUpdateData: Record<string, unknown> = {};
+    if (parsed.data.feedQuantityKg !== undefined) {
+      mealUpdateData.feedQuantityKg = parsed.data.feedQuantityKg;
+    }
+    if (parsed.data.feedProductId !== undefined) {
+      const product = await this.prisma.feedProduct.findFirst({
+        where: {
+          id: parsed.data.feedProductId,
+          farmId: entry.farmId,
+          organizationId,
+          status: 'ACTIVE',
+        },
+      });
+      if (!product) throw new BadRequestException('Select a valid feed code');
+      mealUpdateData.feedProductId = parsed.data.feedProductId;
+    }
+    if (parsed.data.actualTime !== undefined) mealUpdateData.actualTime = parsed.data.actualTime;
+    if (parsed.data.checkTrayRemainingPercentage !== undefined) {
+      mealUpdateData.checkTrayRemainingPercentage = parsed.data.checkTrayRemainingPercentage;
+    }
+    if (parsed.data.appetiteStatus !== undefined) {
+      mealUpdateData.appetiteStatus = parsed.data.appetiteStatus;
+    }
+    if (parsed.data.remarks !== undefined) mealUpdateData.remarks = parsed.data.remarks;
+
     await this.prisma.feedingMeal.update({
       where: { id: mealId },
-      data: {
-        feedQuantityKg: parsed.data.feedQuantityKg,
-        feedProductId: parsed.data.feedProductId,
-        actualTime: parsed.data.actualTime,
-        checkTrayRemainingPercentage: parsed.data.checkTrayRemainingPercentage as never,
-        appetiteStatus: parsed.data.appetiteStatus as never,
-        remarks: parsed.data.remarks,
-      },
+      data: mealUpdateData as never,
     });
 
     const updated = await this.prisma.feedingEntry.update({
@@ -589,6 +621,92 @@ export class FeedingService {
 
     if (!result._sum.feedQuantityKg) return '0.000';
     return decimalToString(result._sum.feedQuantityKg);
+  }
+
+  async getFarmFeedUsedByCode(farmId: string) {
+    const meals = await this.prisma.feedingMeal.findMany({
+      where: {
+        feedingEntry: {
+          farmId,
+          status: { not: 'VOIDED' },
+        },
+      },
+      select: {
+        feedQuantityKg: true,
+        feedProductId: true,
+        feedProduct: { select: { feedCode: true } },
+        feedingEntry: {
+          select: {
+            feedProductId: true,
+            feedProduct: { select: { feedCode: true } },
+            pond: { select: { id: true, name: true, code: true } },
+          },
+        },
+      },
+    });
+
+    const feedCodeOrder = ['1C', '2C', '20', '3S', '3SP', '3P'];
+    const byProduct = new Map<
+      string,
+      {
+        feedProductId: string;
+        feedCode: string;
+        totalUsedKg: number;
+        byPond: Map<
+          string,
+          { pondId: string; pondName: string; pondCode: string; usedKg: number }
+        >;
+      }
+    >();
+
+    for (const meal of meals) {
+      const productId = meal.feedProductId ?? meal.feedingEntry.feedProductId;
+      if (!productId) continue;
+
+      const feedCode =
+        meal.feedProduct?.feedCode ?? meal.feedingEntry.feedProduct?.feedCode ?? '—';
+      const qty = parseFloat(meal.feedQuantityKg.toString());
+      if (qty <= 0) continue;
+
+      if (!byProduct.has(productId)) {
+        byProduct.set(productId, {
+          feedProductId: productId,
+          feedCode,
+          totalUsedKg: 0,
+          byPond: new Map(),
+        });
+      }
+
+      const item = byProduct.get(productId)!;
+      item.totalUsedKg += qty;
+
+      const pond = meal.feedingEntry.pond;
+      if (!item.byPond.has(pond.id)) {
+        item.byPond.set(pond.id, {
+          pondId: pond.id,
+          pondName: pond.name,
+          pondCode: pond.code,
+          usedKg: 0,
+        });
+      }
+      item.byPond.get(pond.id)!.usedKg += qty;
+    }
+
+    return Array.from(byProduct.values())
+      .sort((a, b) => feedCodeOrder.indexOf(a.feedCode) - feedCodeOrder.indexOf(b.feedCode))
+      .map((item) => ({
+        feedProductId: item.feedProductId,
+        feedCode: item.feedCode,
+        totalUsedKg: item.totalUsedKg.toFixed(3),
+        byPond: Array.from(item.byPond.values())
+          .sort((a, b) => a.pondCode.localeCompare(b.pondCode))
+          .map((pond) => ({
+            pondId: pond.pondId,
+            pondName: pond.pondName,
+            pondCode: pond.pondCode,
+            feedUsedKg: pond.usedKg.toFixed(3),
+          })),
+      }));
   }
 
   async getPondTodayStatuses(farmId: string, timezone: string) {

@@ -289,21 +289,47 @@ export function FeedingEntryPage() {
         const next = current.filter((id) => id !== productId);
         setRows((rowsCurrent) =>
           rowsCurrent.map((row) =>
-            row.feedProductId === productId
+            row.feedProductId === productId && !row.mealId
               ? { ...row, feedProductId: next[0] || resolvedFeedProductId }
               : row,
           ),
         );
         return next;
       }
+
       const next = [...current, productId];
-      if (assignRowKey) {
-        setRows((rowsCurrent) =>
-          rowsCurrent.map((row) =>
-            row.key === assignRowKey ? { ...row, feedProductId: productId } : row,
-          ),
+      setRows((rowsCurrent) => {
+        if (assignRowKey) {
+          const target = rowsCurrent.find((row) => row.key === assignRowKey);
+          const targetQty = target
+            ? formatFeedQtyKg(target.quantity, target.quantityUnit)
+            : '';
+          const targetHasDifferentCode =
+            !!target?.feedProductId && target.feedProductId !== productId;
+
+          if (!targetQty && !targetHasDifferentCode) {
+            return rowsCurrent.map((row) =>
+              row.key === assignRowKey ? { ...row, feedProductId: productId } : row,
+            );
+          }
+
+          const alreadyHasRow = rowsCurrent.some(
+            (row) => row.feedProductId === productId && !row.mealId,
+          );
+          if (alreadyHasRow) return rowsCurrent;
+
+          const nextNumber = Math.max(0, ...rowsCurrent.map((r) => r.mealNumber)) + 1;
+          return [...rowsCurrent, defaultRow(nextNumber, productId)];
+        }
+
+        const alreadyHasRow = rowsCurrent.some(
+          (row) => row.feedProductId === productId && !row.mealId,
         );
-      }
+        if (alreadyHasRow) return rowsCurrent;
+
+        const nextNumber = Math.max(0, ...rowsCurrent.map((r) => r.mealNumber)) + 1;
+        return [...rowsCurrent, defaultRow(nextNumber, productId)];
+      });
       return next;
     });
     setSaveError(null);
@@ -317,7 +343,11 @@ export function FeedingEntryPage() {
       setSaveOk(false);
     }
     const nextNumber = Math.max(0, ...rows.map((r) => r.mealNumber)) + 1;
-    const defaultProductId = activeCodeProducts[0]?.id || resolvedFeedProductId;
+    const usedIds = new Set(rows.map((row) => row.feedProductId).filter(Boolean));
+    const nextProduct =
+      activeCodeProducts.find((product) => !usedIds.has(product.id)) ||
+      activeCodeProducts[0];
+    const defaultProductId = nextProduct?.id || resolvedFeedProductId;
     setRows((current) => [...current, defaultRow(nextNumber, defaultProductId)]);
   };
 
@@ -432,9 +462,14 @@ export function FeedingEntryPage() {
           }
         }
       } else {
-        if (resolvedFeedProductId && resolvedFeedProductId !== entry.feedProductId) {
+        const productIds = [
+          ...new Set(
+            filled.map((row) => row.feedProductId || resolvedFeedProductId).filter(Boolean),
+          ),
+        ];
+        if (productIds.length === 1 && productIds[0] !== entry.feedProductId) {
           entry = await api.patch<FeedingEntryDto>(`/feeding-entries/${entry.id}`, {
-            feedProductId: resolvedFeedProductId,
+            feedProductId: productIds[0],
           });
         }
         await persistMeals(entry, filled);
@@ -454,6 +489,8 @@ export function FeedingEntryPage() {
 
       await queryClient.invalidateQueries({ queryKey: ['pond-status', selectedFarmId] });
       await queryClient.invalidateQueries({ queryKey: ['dashboard', selectedFarmId] });
+      await queryClient.invalidateQueries({ queryKey: ['inventory-summary', selectedFarmId] });
+      await queryClient.invalidateQueries({ queryKey: ['inventory-entries', selectedFarmId] });
       setSaveOk(true);
       setMode('view');
     } catch (err) {
