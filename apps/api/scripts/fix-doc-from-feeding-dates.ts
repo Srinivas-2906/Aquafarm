@@ -37,7 +37,7 @@ async function main() {
     const earliestFeedingDate = cycle.feedingEntries[0].feedingDate;
     let stockingDate = cycle.stockingDate;
 
-    if (earliestFeedingDate < stockingDate) {
+    if (earliestFeedingDate.getTime() !== stockingDate.getTime()) {
       stockingUpdates += 1;
       console.log(
         `[stocking] cycle=${cycle.id} pond=${cycle.pond.name} (#${cycle.pond.code}) ` +
