@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuidv4 } from 'uuid';
-import { Plus, Pencil, ChevronDown, Minus, BarChart3 } from 'lucide-react';
+import { Plus, Pencil, ChevronDown, Minus, BarChart3, Copy } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { AddTankButton } from '@/components/AddTankButton';
 import { EditTankNameButton } from '@/components/EditTankNameButton';
@@ -15,6 +15,7 @@ import { api, ApiError } from '@/lib/api';
 import { saveFeedingLocally } from '@/lib/sync';
 import {
   getTodayISO,
+  addDaysISO,
   formatQty,
   formatShortDate,
   getDefaultMealTime,
@@ -53,7 +54,7 @@ function defaultRow(mealNumber = 1, feedProductId = ''): FeedRow {
 }
 
 function rowsFromEntry(entry: FeedingEntryDto): FeedRow[] {
-  if (!entry.meals.length) return [defaultRow(1, entry.feedProductId)];
+  if (!entry.meals.length) return [];
   return entry.meals
     .sort((a, b) => a.mealNumber - b.mealNumber)
     .map((meal) => {
@@ -63,6 +64,33 @@ function rowsFromEntry(entry: FeedingEntryDto): FeedRow[] {
         mealId: meal.id,
         mealNumber: meal.mealNumber,
         feedProductId: meal.feedProductId || entry.feedProductId,
+        quantity: meal.feedQuantityKg,
+        quantityUnit: 'kg' as const,
+        hour,
+        ampm,
+      };
+    });
+}
+
+function rowsFromCopiedEntry(
+  sourceEntry: FeedingEntryDto,
+  targetEntry?: FeedingEntryDto | null,
+): FeedRow[] {
+  if (!sourceEntry.meals.length) return [];
+  const existingSorted = targetEntry?.meals.length
+    ? [...targetEntry.meals].sort((a, b) => a.mealNumber - b.mealNumber)
+    : [];
+
+  return sourceEntry.meals
+    .sort((a, b) => a.mealNumber - b.mealNumber)
+    .map((meal, index) => {
+      const { hour, ampm } = from24HourTime(meal.actualTime || getDefaultMealTime());
+      const existingMeal = existingSorted[index];
+      return {
+        key: existingMeal?.id ?? uuidv4(),
+        mealId: existingMeal?.id,
+        mealNumber: existingMeal?.mealNumber ?? index + 1,
+        feedProductId: meal.feedProductId || sourceEntry.feedProductId,
         quantity: meal.feedQuantityKg,
         quantityUnit: 'kg' as const,
         hour,
@@ -113,6 +141,17 @@ export function FeedingEntryPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState(false);
   const [mode, setMode] = useState<'view' | 'add' | 'edit'>('view');
+  const [copyingFeed, setCopyingFeed] = useState(false);
+  const [copySourceDate, setCopySourceDate] = useState(() => addDaysISO(getTodayISO(), -1));
+  const [copyFeedback, setCopyFeedback] = useState<{ type: 'success' | 'info'; text: string } | null>(
+    null,
+  );
+
+  const copyDateInputRef = useRef<HTMLInputElement>(null);
+  const copiedDraftRef = useRef(false);
+  const lastCopyPickRef = useRef('');
+  const lastCopyTimeRef = useRef(0);
+  const copyPickerActiveRef = useRef(false);
 
   const todayISO = getTodayISO();
   const isOwner = user?.role === UserRole.OWNER;
@@ -168,9 +207,15 @@ export function FeedingEntryPage() {
   );
 
   useEffect(() => {
+    copiedDraftRef.current = false;
+    lastCopyPickRef.current = '';
+  }, [feedingDate, selectedPondId]);
+
+  useEffect(() => {
     if (entryId) return;
     if (!selectedPondId || !selectedFarmId || !entryLoaded) return;
     if (!existingEntry) return;
+    if (copiedDraftRef.current) return;
 
     setRows(rowsFromEntry(existingEntry));
     setFeedProductId(existingEntry.feedProductId);
@@ -182,11 +227,12 @@ export function FeedingEntryPage() {
     if (entryId) return;
     if (!selectedPondId || !selectedFarmId || !entryLoaded || existingEntry) return;
     if (!sortedFeedProducts?.length) return;
+    if (copiedDraftRef.current) return;
 
     const defaultId =
       sortedFeedProducts.find((fp) => fp.feedCode === '1C')?.id || sortedFeedProducts[0].id;
     setSelectedCodeIds(defaultId ? [defaultId] : []);
-    setRows([defaultRow(1, defaultId)]);
+    setRows([]);
     setMode('add');
     setSaveOk(false);
   }, [existingEntry, entryId, entryLoaded, selectedPondId, selectedFarmId, feedingDate, sortedFeedProducts]);
@@ -244,9 +290,17 @@ export function FeedingEntryPage() {
   const handleDateChange = (value: string) => {
     if (!value || value > todayISO) return;
     setFeedingDate(value);
+    setCopySourceDate(addDaysISO(value, -1));
     setSaveError(null);
     setSaveOk(false);
+    setCopyFeedback(null);
   };
+
+  useEffect(() => {
+    if (copySourceDate === feedingDate) {
+      setCopySourceDate(addDaysISO(feedingDate, -1));
+    }
+  }, [feedingDate, copySourceDate]);
 
   const openTankReport = () => {
     navigate(`/reports?pondId=${selectedPondId}&from=feeding`);
@@ -256,6 +310,101 @@ export function FeedingEntryPage() {
     feedingDate === todayISO
       ? t('feeding.todayTotal')
       : t('feeding.dayTotal', { date: formatShortDate(feedingDate) });
+
+  const previousFeedingDate = addDaysISO(feedingDate, -1);
+  const showCopyFeed = !!selectedFarmId && !!selectedPondId;
+  const canUseCopyFeed = canEdit && !copyingFeed;
+
+  const handleCopyFromDate = async (sourceDate: string) => {
+    if (!selectedFarmId || !selectedPondId || copyingFeed) return;
+    if (!sourceDate || sourceDate > todayISO || sourceDate === feedingDate) {
+      setCopyFeedback({ type: 'info', text: t('feeding.sameDateCopyError') });
+      return;
+    }
+    setCopyingFeed(true);
+    setCopyFeedback(null);
+    setSaveError(null);
+    setSaveOk(false);
+    try {
+      const sourceEntry = await fetchEntryForDate(selectedFarmId, selectedPondId, sourceDate);
+      if (!sourceEntry?.meals.length) {
+        setCopyFeedback({
+          type: 'info',
+          text: t('feeding.noPreviousEntry', { date: formatShortDate(sourceDate) }),
+        });
+        return;
+      }
+      const copiedRows = rowsFromCopiedEntry(sourceEntry, activeEntry);
+      copiedDraftRef.current = true;
+      setRows(copiedRows);
+      setSelectedCodeIds(codeIdsFromEntry(sourceEntry));
+      setFeedProductId(sourceEntry.feedProductId);
+      setMode(hasSavedEntry ? 'edit' : 'add');
+      setCopyFeedback({
+        type: 'success',
+        text: t('feeding.copiedPreviousEntry', { date: formatShortDate(sourceDate) }),
+      });
+    } catch (err) {
+      setCopyFeedback({ type: 'info', text: readError(err, t('common.error')) });
+    } finally {
+      setCopyingFeed(false);
+    }
+  };
+
+  const handleCopyPreviousDay = () => {
+    setCopySourceDate(previousFeedingDate);
+    void handleCopyFromDate(previousFeedingDate);
+  };
+
+  const handleCopyDateSelected = (value: string, options?: { force?: boolean }) => {
+    if (!value || value > todayISO) return;
+    if (value === feedingDate) {
+      setCopyFeedback({ type: 'info', text: t('feeding.sameDateCopyError') });
+      return;
+    }
+    const now = Date.now();
+    if (
+      !options?.force &&
+      lastCopyPickRef.current === value &&
+      now - lastCopyTimeRef.current < 800
+    ) {
+      return;
+    }
+    lastCopyPickRef.current = value;
+    lastCopyTimeRef.current = now;
+    setCopySourceDate(value);
+    setCopyFeedback(null);
+    void handleCopyFromDate(value);
+  };
+
+  const handleCopyDateSelectedRef = useRef(handleCopyDateSelected);
+  handleCopyDateSelectedRef.current = handleCopyDateSelected;
+
+  const handleCopyDateInput = (event: React.FormEvent<HTMLInputElement>) => {
+    handleCopyDateSelected(event.currentTarget.value);
+  };
+
+  const handleCopyDateFocus = () => {
+    copyPickerActiveRef.current = true;
+    lastCopyPickRef.current = '';
+  };
+
+  const handleCopyDateBlur = (event: React.FocusEvent<HTMLInputElement>) => {
+    if (!copyPickerActiveRef.current) return;
+    copyPickerActiveRef.current = false;
+    const value = event.currentTarget.value;
+    if (value) handleCopyDateSelected(value, { force: true });
+  };
+
+  useEffect(() => {
+    const input = copyDateInputRef.current;
+    if (!input) return;
+    const onNativeChange = () => {
+      if (input.value) handleCopyDateSelectedRef.current(input.value);
+    };
+    input.addEventListener('change', onNativeChange);
+    return () => input.removeEventListener('change', onNativeChange);
+  }, [feedingDate, selectedPondId]);
 
   const startEditing = () => {
     setMode('edit');
@@ -282,44 +431,37 @@ export function FeedingEntryPage() {
     setSaveOk(false);
   };
 
-  const toggleFeedCode = (productId: string, assignRowKey?: string) => {
-    setSelectedCodeIds((current) => {
-      if (current.includes(productId)) {
-        if (current.length === 1) return current;
+  const toggleFeedCode = (productId: string, rowKey: string, mode: 'add' | 'remove') => {
+    if (mode === 'remove') {
+      setSelectedCodeIds((current) => {
         const next = current.filter((id) => id !== productId);
         setRows((rowsCurrent) =>
-          rowsCurrent.map((row) =>
-            row.feedProductId === productId && !row.mealId
-              ? { ...row, feedProductId: next[0] || resolvedFeedProductId }
-              : row,
-          ),
+          rowsCurrent.map((row) => {
+            if (row.mealId || row.feedProductId !== productId) return row;
+            return { ...row, feedProductId: next[0] || '' };
+          }),
         );
         return next;
-      }
+      });
+      setSaveError(null);
+      setSaveOk(false);
+      return;
+    }
+
+    setSelectedCodeIds((current) => {
+      if (current.includes(productId)) return current;
 
       const next = [...current, productId];
       setRows((rowsCurrent) => {
-        if (assignRowKey) {
-          const target = rowsCurrent.find((row) => row.key === assignRowKey);
-          const targetQty = target
-            ? formatFeedQtyKg(target.quantity, target.quantityUnit)
-            : '';
-          const targetHasDifferentCode =
-            !!target?.feedProductId && target.feedProductId !== productId;
+        const target = rowsCurrent.find((row) => row.key === rowKey);
+        const targetQty = target ? formatFeedQtyKg(target.quantity, target.quantityUnit) : '';
+        const targetHasDifferentCode =
+          !!target?.feedProductId && target.feedProductId !== productId;
 
-          if (!targetQty && !targetHasDifferentCode) {
-            return rowsCurrent.map((row) =>
-              row.key === assignRowKey ? { ...row, feedProductId: productId } : row,
-            );
-          }
-
-          const alreadyHasRow = rowsCurrent.some(
-            (row) => row.feedProductId === productId && !row.mealId,
+        if (!targetQty && !targetHasDifferentCode) {
+          return rowsCurrent.map((row) =>
+            row.key === rowKey ? { ...row, feedProductId: productId } : row,
           );
-          if (alreadyHasRow) return rowsCurrent;
-
-          const nextNumber = Math.max(0, ...rowsCurrent.map((r) => r.mealNumber)) + 1;
-          return [...rowsCurrent, defaultRow(nextNumber, productId)];
         }
 
         const alreadyHasRow = rowsCurrent.some(
@@ -338,7 +480,7 @@ export function FeedingEntryPage() {
 
   const addRow = () => {
     if (hasSavedEntry && mode === 'view') {
-      setMode('add');
+      setMode('edit');
       setSaveError(null);
       setSaveOk(false);
     }
@@ -352,69 +494,86 @@ export function FeedingEntryPage() {
   };
 
   const removeRow = (key: string) => {
-    setRows((current) => {
-      const target = current.find((row) => row.key === key);
-      if (!target || target.mealId) return current;
-
-      const unsavedRows = current.filter((row) => !row.mealId);
-      if (!hasSavedEntry && unsavedRows.length <= 1) return current;
-
-      const next = current.filter((row) => row.key !== key);
-      return next.length ? next : [defaultRow(1, activeCodeProducts[0]?.id || resolvedFeedProductId)];
-    });
+    if (mode === 'view') return;
+    if (hasSavedEntry && mode !== 'edit') return;
+    setRows((current) =>
+      current
+        .filter((row) => row.key !== key)
+        .map((row, index) => ({ ...row, mealNumber: index + 1 })),
+    );
     setSaveError(null);
     setSaveOk(false);
   };
 
   const ensurePondReady = async (): Promise<PondDto> => {
-    let pond = ponds?.find((p) => p.id === selectedPondId);
-    if (pond?.activeCycle) return pond;
-
-    await api.post(`/ponds/${selectedPondId}/culture-cycle`, {});
+    await api.post(`/ponds/${selectedPondId}/culture-cycle`, { stockingDate: feedingDate });
     const fresh = await queryClient.fetchQuery({
       queryKey: ['ponds', selectedFarmId],
       queryFn: () => api.get<PondDto[]>(`/farms/${selectedFarmId}/ponds`),
     });
-    pond = fresh?.find((p) => p.id === selectedPondId);
+    const pond = fresh?.find((p) => p.id === selectedPondId);
     if (!pond?.activeCycle) {
       throw new ApiError(400, t('feeding.noActiveCycle'));
     }
     return pond;
   };
 
-  const persistMeals = async (entry: FeedingEntryDto, filled: FeedRow[]) => {
-    for (const row of filled) {
-      const qty = formatFeedQtyKg(row.quantity, row.quantityUnit);
-      if (!qty) continue;
-      const payload = {
-        feedQuantityKg: qty,
-        feedProductId: row.feedProductId || resolvedFeedProductId,
-        actualTime: to24HourTime(row.hour, '00', row.ampm),
-      };
-      if (row.mealId) {
-        await api.patch(`/feeding-entries/${entry.id}/meals/${row.mealId}`, payload);
-      } else {
-        await api.post(`/feeding-entries/${entry.id}/meals`, {
-          mealNumber: row.mealNumber,
-          ...payload,
-        });
-      }
-    }
-  };
-
-  const handleSaveAll = async () => {
-    if (!selectedFarmId) return;
-
-    const filled = rows
+  const buildOrderedFilledRows = (sourceRows: FeedRow[]) =>
+    sourceRows
       .map((row) => ({
         ...row,
         quantity: formatFeedQtyKg(row.quantity, row.quantityUnit),
         quantityUnit: 'kg' as const,
       }))
-      .filter((row) => row.quantity);
+      .filter((row) => row.quantity)
+      .map((row, index) => ({ ...row, mealNumber: index + 1 }));
 
-    if (!filled.length) return;
-    if (!resolvedFeedProductId) {
+  const clearAllMeals = async (entry: FeedingEntryDto) =>
+    api.post<{ cleared: true }>(`/feeding-entries/${entry.id}/clear-meals`);
+
+  const syncMeals = async (entry: FeedingEntryDto, filled: FeedRow[]) =>
+    api.put<FeedingEntryDto | null>(`/feeding-entries/${entry.id}/meals`, {
+      meals: filled.map((row) => ({
+        id: row.mealId,
+        feedQuantityKg: row.quantity,
+        feedProductId: row.feedProductId || resolvedFeedProductId,
+        actualTime: to24HourTime(row.hour, '00', row.ampm),
+      })),
+    });
+
+  const isEditingRows = mode === 'edit' || (mode === 'add' && !hasSavedEntry);
+  const hasRowQuantity = rows.some((row) => formatFeedQtyKg(row.quantity, row.quantityUnit));
+  const clearingEntry = rows.length === 0 && !!activeEntry && mode === 'edit';
+  const canSave = hasRowQuantity || clearingEntry;
+
+  const applySavedEntryState = (latest: FeedingEntryDto | null | undefined) => {
+    copiedDraftRef.current = false;
+    lastCopyPickRef.current = '';
+    if (latest) {
+      queryClient.setQueryData(['feeding-entry-by-date', selectedPondId, feedingDate], latest);
+      setFeedProductId(latest.feedProductId);
+      setSelectedCodeIds(codeIdsFromEntry(latest));
+      setRows(rowsFromEntry(latest));
+      setMode('view');
+      return;
+    }
+
+    queryClient.setQueryData(['feeding-entry-by-date', selectedPondId, feedingDate], null);
+    const defaultId =
+      sortedFeedProducts?.find((fp) => fp.feedCode === '1C')?.id || sortedFeedProducts?.[0]?.id || '';
+    setRows([]);
+    setSelectedCodeIds(defaultId ? [defaultId] : []);
+    setFeedProductId(defaultId);
+    setMode('add');
+  };
+
+  const handleSaveAll = async () => {
+    if (!selectedFarmId) return;
+
+    const filled = buildOrderedFilledRows(rows);
+
+    if (!filled.length && !hasSavedEntry && !activeEntry) return;
+    if (filled.length && !resolvedFeedProductId) {
       setSaveError(t('feeding.selectFeedCode'));
       return;
     }
@@ -428,6 +587,26 @@ export function FeedingEntryPage() {
       let entry =
         activeEntry ||
         (await fetchEntryForDate(selectedFarmId, selectedPondId, feedingDate));
+
+      if (!filled.length) {
+        if (!entry) {
+          setSaveError(t('feeding.noMealsYet'));
+          return;
+        }
+        await clearAllMeals(entry);
+        await queryClient.invalidateQueries({
+          queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate],
+        });
+        const refreshed = await refetchEntry();
+        applySavedEntryState(refreshed.data);
+        await queryClient.invalidateQueries({ queryKey: ['pond-status', selectedFarmId] });
+        await queryClient.invalidateQueries({ queryKey: ['dashboard', selectedFarmId] });
+        await queryClient.invalidateQueries({ queryKey: ['inventory-summary', selectedFarmId] });
+        await queryClient.invalidateQueries({ queryKey: ['inventory-entries', selectedFarmId] });
+        setSaveOk(true);
+        setCopyFeedback(null);
+        return;
+      }
 
       if (!entry) {
         const primaryFeedProductId = filled[0].feedProductId || resolvedFeedProductId;
@@ -453,7 +632,7 @@ export function FeedingEntryPage() {
         } catch (err) {
           if (err instanceof ApiError && err.statusCode === 409) {
             entry = await fetchEntryForDate(selectedFarmId, selectedPondId, feedingDate);
-            if (entry) await persistMeals(entry, filled);
+            if (entry) entry = await syncMeals(entry, filled);
             else throw err;
           } else if (!navigator.onLine) {
             await saveFeedingLocally(body, selectedFarmId);
@@ -472,27 +651,20 @@ export function FeedingEntryPage() {
             feedProductId: productIds[0],
           });
         }
-        await persistMeals(entry, filled);
+        entry = await syncMeals(entry, filled);
       }
 
       await queryClient.invalidateQueries({
         queryKey: ['feeding-entry-by-date', selectedPondId, feedingDate],
       });
       const refreshed = await refetchEntry();
-      const latest = refreshed.data || entry;
-      if (latest) {
-        queryClient.setQueryData(['feeding-entry-by-date', selectedPondId, feedingDate], latest);
-        setFeedProductId(latest.feedProductId);
-        setSelectedCodeIds(codeIdsFromEntry(latest));
-        setRows(rowsFromEntry(latest));
-      }
-
+      applySavedEntryState(refreshed.data);
       await queryClient.invalidateQueries({ queryKey: ['pond-status', selectedFarmId] });
       await queryClient.invalidateQueries({ queryKey: ['dashboard', selectedFarmId] });
       await queryClient.invalidateQueries({ queryKey: ['inventory-summary', selectedFarmId] });
       await queryClient.invalidateQueries({ queryKey: ['inventory-entries', selectedFarmId] });
       setSaveOk(true);
-      setMode('view');
+      setCopyFeedback(null);
     } catch (err) {
       setSaveError(readError(err, t('common.error')));
     } finally {
@@ -600,6 +772,51 @@ export function FeedingEntryPage() {
 
         {!canEdit && <RecordLockNotice />}
 
+        {showCopyFeed && (
+          <div className="space-y-1">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleCopyPreviousDay}
+                disabled={!canUseCopyFeed}
+                aria-label={t('feeding.copyPreviousDayHint', { date: formatShortDate(previousFeedingDate) })}
+                className="btn-secondary flex-1 flex items-center justify-center gap-1 !text-[11px] !py-2 !px-2 !min-h-0 whitespace-nowrap disabled:opacity-50"
+              >
+                <Copy size={13} className="shrink-0" />
+                {copyingFeed ? t('common.loading') : t('feeding.copyPreviousDay')}
+              </button>
+              <label
+                className={`btn-secondary flex-1 relative flex items-center justify-center gap-1 !text-[11px] !py-2 !px-2 !min-h-0 whitespace-nowrap overflow-hidden ${canUseCopyFeed ? 'cursor-pointer' : 'opacity-50 pointer-events-none'}`}
+              >
+                <Copy size={13} className="shrink-0 pointer-events-none" />
+                <span className="pointer-events-none">{t('feeding.copyFromDate')}</span>
+                <input
+                  ref={copyDateInputRef}
+                  type="date"
+                  key={`copy-source-${feedingDate}`}
+                  defaultValue={copySourceDate}
+                  max={todayISO}
+                  disabled={!canUseCopyFeed}
+                  onFocus={handleCopyDateFocus}
+                  onBlur={handleCopyDateBlur}
+                  onChange={handleCopyDateInput}
+                  onInput={handleCopyDateInput}
+                  className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-[0.01] !text-base disabled:cursor-not-allowed"
+                  aria-label={t('feeding.copyFromDateHint')}
+                />
+              </label>
+            </div>
+            {copyFeedback && (
+              <p
+                className={`text-xs text-center ${copyFeedback.type === 'success' ? 'text-success font-medium' : 'text-text-secondary'}`}
+                role="status"
+              >
+                {copyFeedback.text}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="space-y-2 pb-32">
           <div className="flex items-center gap-2 px-0.5">
             <div className="grid flex-1 grid-cols-[68px_1fr_minmax(0,1.05fr)] gap-2 text-[11px] font-medium text-text-secondary">
@@ -619,6 +836,10 @@ export function FeedingEntryPage() {
             )}
           </div>
 
+          {rows.length === 0 && (
+            <p className="text-sm text-text-secondary text-center py-6">{t('feeding.noMealsYet')}</p>
+          )}
+
           {rows.map((row, index) => {
             const isSavedRow = !!row.mealId;
             const isViewMode = (hasSavedEntry && mode === 'view') || !canEdit;
@@ -630,7 +851,7 @@ export function FeedingEntryPage() {
               activeEntry?.meals.find((m) => m.id === row.mealId)?.feedCode ||
               feedCodeLabel;
             const showFeedCodePicker = !showReadonly && !!sortedFeedProducts?.length;
-            const canDeleteRow = rowEditable && !row.mealId && (hasSavedEntry || rows.filter((r) => !r.mealId).length > 1);
+            const canDeleteRow = canEdit && isEditingRows && rows.length > 0;
             const feedLabel = t('feeding.feedLabel', { number: index + 1 });
 
             return (
@@ -641,10 +862,10 @@ export function FeedingEntryPage() {
                     <button
                       type="button"
                       onClick={() => removeRow(row.key)}
-                      className="min-h-0 min-w-0 w-6 h-6 flex items-center justify-center rounded-md border border-border text-text-secondary hover:text-danger hover:border-danger/40"
+                      className="min-h-0 min-w-0 w-7 h-7 flex items-center justify-center rounded-md border border-danger/30 bg-danger/5 text-danger hover:bg-danger/10 hover:border-danger/50"
                       aria-label={t('feeding.removeFeed')}
                     >
-                      <Minus size={14} />
+                      <Minus size={15} strokeWidth={2.5} />
                     </button>
                   )}
                 </div>
@@ -661,11 +882,10 @@ export function FeedingEntryPage() {
                         <FeedCodeCheckboxDropdown
                           products={sortedFeedProducts!}
                           selectedCodeIds={selectedCodeIds}
-                          rowProductId={row.feedProductId || resolvedFeedProductId}
+                          rowProductId={row.feedProductId}
+                          rowKey={row.key}
                           disabled={!rowEditable}
-                          onToggleCode={(productId, assignRow) =>
-                            toggleFeedCode(productId, assignRow ? row.key : undefined)
-                          }
+                          onToggleCode={toggleFeedCode}
                           onAssignRow={(productId) => updateRow(row.key, { feedProductId: productId })}
                         />
                       ) : (
@@ -766,7 +986,7 @@ export function FeedingEntryPage() {
               <button
                 type="button"
                 onClick={() => void handleSaveAll()}
-                disabled={saving || !rows.some((r) => formatFeedQtyKg(r.quantity, r.quantityUnit))}
+                disabled={saving || !canSave}
                 className="btn-primary btn-inline !py-2"
               >
                 {saving ? t('common.loading') : t('common.save')}

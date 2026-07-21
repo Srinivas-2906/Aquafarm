@@ -22,14 +22,20 @@ describe('getFarmToday', () => {
 
 describe('calculateDoc', () => {
   it('returns 1 on stocking date', () => {
-    const stocking = new Date('2026-06-16');
-    const feeding = new Date('2026-06-16');
+    const stocking = parseDateOnly('2026-07-07');
+    const feeding = parseDateOnly('2026-07-07');
     expect(calculateDoc(stocking, feeding)).toBe(1);
   });
 
+  it('returns day 2 on the next calendar day', () => {
+    const stocking = parseDateOnly('2026-07-07');
+    const feeding = parseDateOnly('2026-07-08');
+    expect(calculateDoc(stocking, feeding)).toBe(2);
+  });
+
   it('returns correct DOC after days', () => {
-    const stocking = new Date('2026-06-16');
-    const feeding = new Date('2026-07-10');
+    const stocking = parseDateOnly('2026-06-16');
+    const feeding = parseDateOnly('2026-07-10');
     expect(calculateDoc(stocking, feeding)).toBe(25);
   });
 });

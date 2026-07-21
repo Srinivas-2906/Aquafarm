@@ -6,8 +6,9 @@ type FeedCodeCheckboxDropdownProps = {
   products: FeedProductDto[];
   selectedCodeIds: string[];
   rowProductId: string;
+  rowKey: string;
   disabled?: boolean;
-  onToggleCode: (productId: string, assignRow?: boolean) => void;
+  onToggleCode: (productId: string, rowKey: string, mode: 'add' | 'remove') => void;
   onAssignRow: (productId: string) => void;
   placeholder?: string;
 };
@@ -16,6 +17,7 @@ export function FeedCodeCheckboxDropdown({
   products,
   selectedCodeIds,
   rowProductId,
+  rowKey,
   disabled,
   onToggleCode,
   onAssignRow,
@@ -44,14 +46,13 @@ export function FeedCodeCheckboxDropdown({
 
   const handleCheckboxChange = (productId: string, checked: boolean) => {
     if (checked) {
-      if (selectedCodeIds.includes(productId)) {
-        onAssignRow(productId);
-      } else {
-        onToggleCode(productId, true);
+      onAssignRow(productId);
+      if (!selectedCodeIds.includes(productId)) {
+        onToggleCode(productId, rowKey, 'add');
       }
       return;
     }
-    onToggleCode(productId, false);
+    onToggleCode(productId, rowKey, 'remove');
   };
 
   return (
@@ -76,7 +77,7 @@ export function FeedCodeCheckboxDropdown({
           className="absolute left-0 top-full z-30 mt-1 min-w-full w-max max-w-[min(180px,calc(100vw-2rem))] rounded-lg border border-border bg-surface shadow-lg py-1"
         >
           {products.map((fp) => {
-            const checked = selectedCodeIds.includes(fp.id);
+            const checked = selectedCodeIds.includes(fp.id) || rowProductId === fp.id;
             const isRowCode = rowProductId === fp.id;
             return (
               <label

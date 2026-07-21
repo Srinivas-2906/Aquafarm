@@ -16,7 +16,7 @@ import {
   getFarmToday,
   parseDateOnly,
 } from '../common/utils/date.utils';
-import { feedingEntrySchema, feedingMealUpdateSchema } from '@aqualedger/validation';
+import { feedingEntrySchema, feedingMealUpdateSchema, feedingMealsSyncSchema } from '@aqualedger/validation';
 import type { FeedingEntryDto } from '@aqualedger/contracts';
 import { UserRole, FeedingEntryStatus, SubmissionType } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
@@ -146,7 +146,8 @@ export class FeedingService {
     }
 
     const feedingDate = parseDateOnly(data.feedingDate);
-    const doc = calculateDoc(cycle.stockingDate, feedingDate);
+    const stockingDate = await this.syncCycleStockingAndDocs(cycle.id, feedingDate);
+    const doc = calculateDoc(stockingDate, feedingDate);
     const isSupervisor = userRole === UserRole.SUPERVISOR;
 
     if (isSupervisor && !isDateEditableBySupervisor(feedingDate, farm.timezone)) {
@@ -423,6 +424,263 @@ export class FeedingService {
     });
 
     return this.mapEntry(updated, userRole, entry.farm.timezone);
+  }
+
+  async clearAllMeals(
+    entryId: string,
+    userId: string,
+    userRole: UserRole,
+    organizationId: string,
+  ): Promise<null> {
+    const entry = await this.prisma.feedingEntry.findUnique({
+      where: { id: entryId },
+      include: { meals: true, farm: true, pond: true, feedProduct: true, enteredBy: true },
+    });
+    if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
+    if (userRole !== UserRole.OWNER) {
+      const access = await this.prisma.farmUser.findFirst({
+        where: { farmId: entry.farmId, userId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (!access) throw new ForbiddenException('You do not have access to this farm');
+    }
+    if (entry.status === 'VOIDED') {
+      throw new BadRequestException('Cannot edit meals on a voided entry');
+    }
+
+    this.checkEditPermission(entry, userRole, entry.farm.timezone);
+
+    const previousMeals = entry.meals.map((meal) => ({
+      id: meal.id,
+      mealNumber: meal.mealNumber,
+      feedQuantityKg: meal.feedQuantityKg.toString(),
+      feedProductId: meal.feedProductId,
+      actualTime: meal.actualTime,
+    }));
+
+    if (entry.status === 'CONFIRMED') {
+      await this.inventory.reverseFeedConsumed(entryId, userId, 'All feeds removed');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.checkTrayObservation.updateMany({
+        where: { feedingEntryId: entryId },
+        data: { feedingMealId: null },
+      });
+      await tx.inventoryTransaction.updateMany({
+        where: { feedingEntryId: entryId },
+        data: { feedingEntryId: null },
+      });
+      await tx.feedingMeal.deleteMany({ where: { feedingEntryId: entryId } });
+      await tx.feedingEntry.delete({ where: { id: entryId } });
+    });
+
+    await this.audit.log({
+      organizationId: entry.organizationId,
+      farmId: entry.farmId,
+      userId,
+      entityType: 'FEEDING_ENTRY',
+      entityId: entryId,
+      action: 'UPDATE',
+      previousValue: { meals: previousMeals },
+      newValue: { meals: [] },
+      reason: 'All feeds removed',
+    });
+
+    return null;
+  }
+
+  async syncMeals(
+    entryId: string,
+    input: Record<string, unknown>,
+    userId: string,
+    userRole: UserRole,
+    organizationId: string,
+  ): Promise<FeedingEntryDto | null> {
+    const parsed = feedingMealsSyncSchema.safeParse(input);
+    if (!parsed.success) {
+      const message = parsed.error.errors.map((e) => e.message).join(', ');
+      throw new BadRequestException(message || 'Invalid meals sync');
+    }
+
+    const entry = await this.prisma.feedingEntry.findUnique({
+      where: { id: entryId },
+      include: { meals: true, farm: true, pond: true, feedProduct: true, enteredBy: true },
+    });
+    if (!entry) throw new NotFoundException('Entry not found');
+    if (entry.organizationId !== organizationId) {
+      throw new ForbiddenException('You do not have permission for this action');
+    }
+    if (userRole !== UserRole.OWNER) {
+      const access = await this.prisma.farmUser.findFirst({
+        where: { farmId: entry.farmId, userId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (!access) throw new ForbiddenException('You do not have access to this farm');
+    }
+    if (entry.status === 'VOIDED') {
+      throw new BadRequestException('Cannot edit meals on a voided entry');
+    }
+
+    this.checkEditPermission(entry, userRole, entry.farm.timezone);
+
+    const payloadMeals = parsed.data.meals;
+    const payloadIds = new Set(
+      payloadMeals.map((meal) => meal.id).filter((id): id is string => !!id),
+    );
+    const existingIds = new Set(entry.meals.map((meal) => meal.id));
+    for (const id of payloadIds) {
+      if (!existingIds.has(id)) {
+        throw new BadRequestException('One or more meals do not belong to this entry');
+      }
+    }
+
+    if (payloadMeals.length === 0) {
+      return this.clearAllMeals(entryId, userId, userRole, organizationId);
+    }
+
+    const productIds = [...new Set(payloadMeals.map((meal) => meal.feedProductId))];
+    const products = await this.prisma.feedProduct.findMany({
+      where: {
+        id: { in: productIds },
+        farmId: entry.farmId,
+        organizationId,
+        status: 'ACTIVE',
+      },
+      select: { id: true },
+    });
+    if (products.length !== productIds.length) {
+      throw new BadRequestException('Select a valid feed code');
+    }
+
+    const previousMealsForAudit = entry.meals.map((meal) => ({
+      id: meal.id,
+      mealNumber: meal.mealNumber,
+      feedQuantityKg: meal.feedQuantityKg.toString(),
+      feedProductId: meal.feedProductId,
+      actualTime: meal.actualTime,
+    }));
+
+    await this.prisma.$transaction(async (tx) => {
+      const mealsToDelete = entry.meals.filter((meal) => !payloadIds.has(meal.id));
+      for (const meal of mealsToDelete) {
+        await tx.checkTrayObservation.updateMany({
+          where: { feedingMealId: meal.id },
+          data: { feedingMealId: null },
+        });
+        await tx.feedingMeal.delete({ where: { id: meal.id } });
+      }
+
+      const mealsToKeep = entry.meals.filter((meal) => payloadIds.has(meal.id));
+      for (let index = 0; index < mealsToKeep.length; index += 1) {
+        await tx.feedingMeal.update({
+          where: { id: mealsToKeep[index].id },
+          data: { mealNumber: 100 + index },
+        });
+      }
+
+      for (let index = 0; index < payloadMeals.length; index += 1) {
+        const meal = payloadMeals[index];
+        const mealNumber = index + 1;
+        const actualTime = meal.actualTime || new Date().toTimeString().slice(0, 5);
+        if (meal.id) {
+          await tx.feedingMeal.update({
+            where: { id: meal.id },
+            data: {
+              mealNumber,
+              feedQuantityKg: meal.feedQuantityKg,
+              feedProductId: meal.feedProductId,
+              actualTime,
+            },
+          });
+        } else {
+          await tx.feedingMeal.create({
+            data: {
+              feedingEntryId: entryId,
+              mealNumber,
+              feedQuantityKg: meal.feedQuantityKg,
+              feedProductId: meal.feedProductId,
+              actualTime,
+            },
+          });
+        }
+      }
+
+      await tx.feedingEntry.update({
+        where: { id: entryId },
+        data: { version: { increment: 1 } },
+      });
+    });
+
+    const updated = await this.prisma.feedingEntry.findUnique({
+      where: { id: entryId },
+      include: {
+        meals: { orderBy: { mealNumber: 'asc' }, include: { feedProduct: true } },
+        pond: true,
+        feedProduct: true,
+        enteredBy: true,
+        farm: true,
+      },
+    });
+    if (!updated) throw new NotFoundException('Entry not found');
+
+    await this.resyncFeedConsumed(updated, userId);
+
+    await this.audit.log({
+      organizationId: entry.organizationId,
+      farmId: entry.farmId,
+      userId,
+      entityType: 'FEEDING_ENTRY',
+      entityId: entryId,
+      action: 'UPDATE',
+      previousValue: { meals: previousMealsForAudit },
+      newValue: {
+        meals: updated.meals.map((meal) => ({
+          id: meal.id,
+          mealNumber: meal.mealNumber,
+          feedQuantityKg: meal.feedQuantityKg.toString(),
+          feedProductId: meal.feedProductId,
+          actualTime: meal.actualTime,
+        })),
+      },
+    });
+
+    return this.mapEntry(updated, userRole, entry.farm.timezone);
+  }
+
+  private async syncCycleStockingAndDocs(cycleId: string, feedingDate: Date): Promise<Date> {
+    const cycle = await this.prisma.cultureCycle.findUnique({ where: { id: cycleId } });
+    if (!cycle) throw new BadRequestException('No active culture cycle for this pond');
+
+    let stockingDate = cycle.stockingDate;
+    if (feedingDate < stockingDate) {
+      stockingDate = feedingDate;
+      await this.prisma.cultureCycle.update({
+        where: { id: cycleId },
+        data: { stockingDate },
+      });
+    }
+
+    const entries = await this.prisma.feedingEntry.findMany({
+      where: { cultureCycleId: cycleId, status: { not: 'VOIDED' } },
+      select: { id: true, feedingDate: true, doc: true },
+    });
+
+    await Promise.all(
+      entries.map((entry) => {
+        const doc = calculateDoc(stockingDate, entry.feedingDate);
+        if (entry.doc === doc) return Promise.resolve();
+        return this.prisma.feedingEntry.update({
+          where: { id: entry.id },
+          data: { doc },
+        });
+      }),
+    );
+
+    return stockingDate;
   }
 
   private async resyncFeedConsumed(

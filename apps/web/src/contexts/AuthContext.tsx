@@ -30,6 +30,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    const onSessionExpired = () => {
+      setUser(null);
+      setSelectedFarmId(null);
+      localStorage.removeItem('selectedFarmId');
+    };
+    window.addEventListener('auth:session-expired', onSessionExpired);
+    return () => window.removeEventListener('auth:session-expired', onSessionExpired);
+  }, []);
+
+  useEffect(() => {
     const token = localStorage.getItem('accessToken');
     if (token) {
       authApi

@@ -5,6 +5,7 @@ import {
   Post,
   Patch,
   Param,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -83,6 +84,17 @@ export class FeedingController {
     return this.feeding.create(body, userId, role, organizationId);
   }
 
+  @Post(':id/clear-meals')
+  async clearMeals(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    await this.feeding.clearAllMeals(id, userId, role, organizationId);
+    return { cleared: true as const };
+  }
+
   @Post(':id/meals')
   async addMeal(
     @Param('id') id: string,
@@ -104,6 +116,17 @@ export class FeedingController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     return this.feeding.updateMeal(id, mealId, meal, userId, role, organizationId);
+  }
+
+  @Put(':id/meals')
+  async syncMeals(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.feeding.syncMeals(id, body, userId, role, organizationId);
   }
 
   @Post(':id/void')

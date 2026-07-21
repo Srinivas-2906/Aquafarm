@@ -71,6 +71,19 @@ export const feedingMealUpdateSchema = z
     message: 'No changes provided',
   });
 
+export const feedingMealsSyncSchema = z.object({
+  meals: z
+    .array(
+      z.object({
+        id: z.string().uuid().optional(),
+        feedQuantityKg: decimalKg,
+        feedProductId: z.string().uuid(),
+        actualTime: z.string().regex(/^\d{2}:\d{2}$/, 'Enter a valid time').optional(),
+      }),
+    )
+    .max(10),
+});
+
 const entityId = z.string().min(1).max(100);
 
 export const feedingEntrySchema = z.object({

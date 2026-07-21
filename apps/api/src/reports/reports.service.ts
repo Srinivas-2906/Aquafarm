@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FeedingService } from '../feeding/feeding.service';
-import { parseDateOnly, sumDecimals } from '../common/utils/date.utils';
+import { parseDateOnly, sumDecimals, formatDisplayDate } from '../common/utils/date.utils';
 import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
 import { PassThrough } from 'stream';
@@ -311,11 +311,11 @@ export class ReportsService {
       doc.fontSize(16).text('Feeding Management Report', { align: 'center' });
       doc.fontSize(10).text(`Farm: ${data.farmName}`, { align: 'center' });
       if (data.pondName) doc.text(`Pond/Tank: ${data.pondName}`, { align: 'center' });
-      doc.text(`Period: ${data.dateFrom} to ${data.dateTo}`, { align: 'center' });
+      doc.text(`Period: ${formatDisplayDate(data.dateFrom)} to ${formatDisplayDate(data.dateTo)}`, { align: 'center' });
       doc.moveDown();
 
-      const headers = ['Date', 'DOC', 'Code', 'M1', 'M2', 'M3', 'M4', 'M5', 'TDF', 'Cum.', 'Tray', 'Remarks'];
-      const colWidths = [55, 30, 35, 40, 40, 40, 40, 40, 45, 45, 50, 80];
+      const headers = ['Date', 'DOC', 'Code', 'M1', 'M2', 'M3', 'M4', 'M5'];
+      const colWidths = [55, 30, 35, 40, 40, 40, 40, 40];
       let x = 40;
       doc.fontSize(8).font('Helvetica-Bold');
       headers.forEach((h, i) => {
@@ -328,9 +328,10 @@ export class ReportsService {
       for (const row of data.rows) {
         x = 40;
         const values = [
-          row.date, row.doc, row.feedCode,
+          formatDisplayDate(String(row.date)),
+          row.doc,
+          row.feedCode,
           row.meal1, row.meal2, row.meal3, row.meal4, row.meal5,
-          row.tdf, row.cumulative, row.checkTray, row.remarks,
         ];
         const y = doc.y;
         values.forEach((v, i) => {
@@ -361,16 +362,15 @@ export class ReportsService {
       { header: 'Meal 3', key: 'meal3', width: 10 },
       { header: 'Meal 4', key: 'meal4', width: 10 },
       { header: 'Meal 5', key: 'meal5', width: 10 },
-      { header: 'TDF', key: 'tdf', width: 10 },
-      { header: 'Cumulative', key: 'cumulative', width: 12 },
-      { header: 'Check Tray', key: 'checkTray', width: 15 },
-      { header: 'Remarks', key: 'remarks', width: 25 },
       { header: 'Pond/Tank', key: 'pondName', width: 15 },
     ];
 
     for (const row of rows) {
-      const added = sheet.addRow(row);
-      ['meal1', 'meal2', 'meal3', 'meal4', 'meal5', 'tdf', 'cumulative', 'doc'].forEach((key) => {
+      const added = sheet.addRow({
+        ...row,
+        date: formatDisplayDate(String(row.date)),
+      });
+      ['meal1', 'meal2', 'meal3', 'meal4', 'meal5', 'doc'].forEach((key) => {
         const cell = added.getCell(key);
         if (cell.value && cell.value !== '') {
           cell.value = parseFloat(String(cell.value));

@@ -4,8 +4,16 @@ export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
 
+function parseLocalDate(date: string | Date): Date {
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const [y, m, d] = date.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  return typeof date === 'string' ? new Date(date) : date;
+}
+
 export function formatDate(date: string | Date): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+  const d = parseLocalDate(date);
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
@@ -74,7 +82,7 @@ export function toKg(value: string, unit: QuantityUnit): string {
 }
 
 export function formatShortDate(date: string | Date): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+  const d = parseLocalDate(date);
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'numeric', year: '2-digit' });
 }
 
@@ -127,8 +135,10 @@ export function isSupervisorEditableDate(dateISO: string): boolean {
 }
 
 export function calculateDoc(stockingDate: string, feedingDate: string): number {
-  const stock = new Date(stockingDate);
-  const feed = new Date(feedingDate);
-  const diff = Math.floor((feed.getTime() - stock.getTime()) / (1000 * 60 * 60 * 24));
-  return Math.max(diff + 1, 1);
+  const [sy, sm, sd] = stockingDate.split('T')[0].split('-').map(Number);
+  const [fy, fm, fd] = feedingDate.split('T')[0].split('-').map(Number);
+  const stockUtc = Date.UTC(sy, sm - 1, sd);
+  const feedUtc = Date.UTC(fy, fm - 1, fd);
+  const days = Math.floor((feedUtc - stockUtc) / 86_400_000);
+  return Math.max(days + 1, 1);
 }

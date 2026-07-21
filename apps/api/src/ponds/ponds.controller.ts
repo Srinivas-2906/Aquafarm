@@ -54,8 +54,9 @@ export class PondsController {
   @Post('ponds/:pondId/culture-cycle')
   async ensureActiveCycle(
     @Param('pondId') pondId: string,
+    @Body() body: Record<string, unknown>,
     @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.ponds.ensureActiveCycle(pondId, organizationId);
+    return this.ponds.ensureActiveCycle(pondId, organizationId, body);
   }
 }

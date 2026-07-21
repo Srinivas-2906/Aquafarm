@@ -9,7 +9,9 @@
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "test:integration": "jest --config ./test/jest-integration.json"
+    "test:integration": "jest --config ./test/jest-integration.json",
+    "fix:doc": "ts-node --transpile-only scripts/fix-doc-from-feeding-dates.ts",
+    "fix:doc:apply": "ts-node --transpile-only scripts/fix-doc-from-feeding-dates.ts --apply"
   },
   "dependencies": {
     "@aqualedger/config": "*",
