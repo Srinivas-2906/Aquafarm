@@ -24,6 +24,7 @@ import {
   formatFeedQtyKg,
   convertQuantityUnit,
   quantityToKg,
+  formatTankCode,
   isSupervisorEditableDate,
   type QuantityUnit,
 } from '@/lib/utils';
@@ -797,7 +798,7 @@ export function FeedingEntryPage() {
           >
             <p className="text-base font-bold text-primary truncate">
               {selectedPond?.name}
-              {selectedPond?.code ? ` (#${selectedPond.code})` : ''}
+              {selectedPond?.code ? ` (${formatTankCode(selectedPond.code)})` : ''}
             </p>
           </button>
           <input

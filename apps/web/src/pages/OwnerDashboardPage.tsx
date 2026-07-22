@@ -7,7 +7,7 @@ import { AddTankButton } from '@/components/AddTankButton';
 import { TankRowList, pondStatusesToTankRows } from '@/components/TankRowList';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
-import { formatQty } from '@/lib/utils';
+import { compareTankCode, formatQty, formatTankCode } from '@/lib/utils';
 import type { DashboardSummaryDto, FeedUsedByCodeDto } from '@aqualedger/contracts';
 
 function buildFeedUsedPivot(feedUsedByCode: FeedUsedByCodeDto[]) {
@@ -28,9 +28,7 @@ function buildFeedUsedPivot(feedUsedByCode: FeedUsedByCodeDto[]) {
     }
   }
 
-  const tanks = Array.from(tankMap.values()).sort((a, b) =>
-    a.pondCode.localeCompare(b.pondCode, undefined, { numeric: true }),
-  );
+  const tanks = Array.from(tankMap.values()).sort((a, b) => compareTankCode(a.pondCode, b.pondCode));
 
   const rows = feedUsedByCode.map((item) => ({
     feedProductId: item.feedProductId,
@@ -129,7 +127,7 @@ export function OwnerDashboardPage() {
                             className="px-1 py-1.5 text-[11px] font-semibold text-text-secondary border-b border-border text-center min-w-0"
                           >
                             <p className="truncate">{tank.pondName}</p>
-                            <p className="text-[10px] font-normal">#{tank.pondCode}</p>
+                            <p className="text-[10px] font-normal">{formatTankCode(tank.pondCode)}</p>
                           </div>
                         ))}
                         <div className="px-1 py-1.5 text-[11px] font-semibold text-text-secondary border-b border-border text-right">

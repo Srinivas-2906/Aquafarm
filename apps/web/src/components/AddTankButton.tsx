@@ -4,12 +4,12 @@ import { useTranslation } from 'react-i18next';
 import { Plus, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, ApiError } from '@/lib/api';
-import { cn } from '@/lib/utils';
+import { cn, normalizeTankCode } from '@/lib/utils';
 import type { PondDto } from '@aqualedger/contracts';
 
 function suggestNextTankCode(ponds: PondDto[] | undefined) {
   const codes = (ponds ?? [])
-    .map((p) => parseInt(p.code, 10))
+    .map((p) => parseInt(normalizeTankCode(p.code), 10))
     .filter((n) => !Number.isNaN(n));
   if (codes.length === 0) return '1';
   return String(Math.max(...codes) + 1);
@@ -56,7 +56,7 @@ export function AddTankButton({ onCreated, className, compact = false }: AddTank
     try {
       const created = await api.post<PondDto>(`/farms/${selectedFarmId}/ponds`, {
         name: tankName.trim(),
-        code: tankCode.trim(),
+        code: normalizeTankCode(tankCode),
         type: 'TANK',
       });
       await queryClient.invalidateQueries({ queryKey: ['ponds', selectedFarmId] });
@@ -104,7 +104,12 @@ export function AddTankButton({ onCreated, className, compact = false }: AddTank
 
             <div>
               <label className="label">{t('tanks.tankCode')}</label>
-              <input value={tankCode} onChange={(e) => setTankCode(e.target.value)} className="input-field text-base" />
+              <input
+                value={tankCode}
+                onChange={(e) => setTankCode(e.target.value.replace(/^#+/, ''))}
+                className="input-field text-base"
+                placeholder={nextCode}
+              />
             </div>
 
             {error && <p className="text-danger text-sm">{error}</p>}

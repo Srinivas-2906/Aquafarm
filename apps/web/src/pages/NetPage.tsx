@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
-import { getTodayISO } from '@/lib/utils';
+import { formatTankCode, getTodayISO } from '@/lib/utils';
 import type { PondDto } from '@aqualedger/contracts';
 
 type NetEntry = {
@@ -186,7 +186,7 @@ export function NetPage() {
               <option value="">{isLoading ? t('common.loading') : t('net.selectTank')}</option>
               {ponds?.map((pond) => (
                 <option key={pond.id} value={pond.id}>
-                  {pond.name} (#{pond.code})
+                  {pond.name} ({formatTankCode(pond.code)})
                 </option>
               ))}
             </select>
@@ -244,7 +244,7 @@ export function NetPage() {
               <div className="flex items-start justify-between gap-3">
                 <p className="font-semibold text-base leading-snug min-w-0 flex-1">
                   {entry.pondName}
-                  {entry.pondCode ? ` (#${entry.pondCode})` : ''}
+                  {entry.pondCode ? ` (${formatTankCode(entry.pondCode)})` : ''}
                 </p>
                 <button
                   type="button"

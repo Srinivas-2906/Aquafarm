@@ -10,6 +10,7 @@ import { api, ApiError } from '@/lib/api';
 import {
   compareTankCode,
   formatQty,
+  formatTankCode,
   from24HourTime,
   getTodayISO,
   groupMealsByFeedSlot,
@@ -194,7 +195,7 @@ function TankRowItem({
           className="flex-1 min-w-0 flex items-center gap-2 text-left"
         >
           <span className="rounded-md bg-primary text-white text-[11px] font-bold px-1.5 py-0.5 shrink-0">
-            #{tank.pondCode}
+            {formatTankCode(tank.pondCode)}
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold text-primary truncate">{tank.pondName}</p>

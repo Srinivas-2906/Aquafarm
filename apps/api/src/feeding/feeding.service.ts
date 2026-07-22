@@ -16,6 +16,7 @@ import {
   getFarmToday,
   parseDateOnly,
 } from '../common/utils/date.utils';
+import { compareTankCode, normalizeTankCode } from '../common/utils/tank.utils';
 import { feedingEntrySchema, feedingMealUpdateSchema, feedingMealsSyncSchema } from '@aqualedger/validation';
 import type { FeedingEntryDto } from '@aqualedger/contracts';
 import { UserRole, FeedingEntryStatus, SubmissionType } from '@prisma/client';
@@ -943,7 +944,7 @@ export class FeedingService {
         item.byPond.set(pond.id, {
           pondId: pond.id,
           pondName: pond.name,
-          pondCode: pond.code,
+          pondCode: normalizeTankCode(pond.code),
           usedKg: 0,
         });
       }
@@ -957,13 +958,11 @@ export class FeedingService {
         feedCode: item.feedCode,
         totalUsedKg: item.totalUsedKg.toFixed(3),
         byPond: Array.from(item.byPond.values())
-          .sort((a, b) =>
-            a.pondCode.localeCompare(b.pondCode, undefined, { numeric: true, sensitivity: 'base' }),
-          )
+          .sort((a, b) => compareTankCode(a.pondCode, b.pondCode))
           .map((pond) => ({
             pondId: pond.pondId,
             pondName: pond.pondName,
-            pondCode: pond.pondCode,
+            pondCode: normalizeTankCode(pond.pondCode),
             feedUsedKg: pond.usedKg.toFixed(3),
           })),
       }));
@@ -976,7 +975,7 @@ export class FeedingService {
     const ponds = await this.prisma.pond.findMany({
       where: { farmId, status: 'ACTIVE' },
     });
-    ponds.sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true, sensitivity: 'base' }));
+    ponds.sort((a, b) => compareTankCode(a.code, b.code));
 
     return Promise.all(
       ponds.map(async (pond) => {
@@ -1006,7 +1005,7 @@ export class FeedingService {
         return {
           pondId: pond.id,
           pondName: pond.name,
-          pondCode: pond.code,
+          pondCode: normalizeTankCode(pond.code),
           doc,
           mealsEntered,
           usualMealsPerDay: cycle?.usualMealsPerDay ?? 4,

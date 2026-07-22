@@ -143,8 +143,21 @@ export function calculateDoc(stockingDate: string, feedingDate: string): number 
   return Math.max(days + 1, 1);
 }
 
+export function normalizeTankCode(code: string): string {
+  return code.trim().replace(/^#+/, '');
+}
+
 export function compareTankCode(a: string, b: string): number {
-  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+  return normalizeTankCode(a).localeCompare(normalizeTankCode(b), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+}
+
+/** Display as #6 — code in data should not include leading #. */
+export function formatTankCode(code: string): string {
+  const normalized = normalizeTankCode(code);
+  return normalized ? `#${normalized}` : '#';
 }
 
 /** Group meals into feed slots by shared actualTime (same as feeding entry UI). */

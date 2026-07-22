@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Pencil, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, ApiError } from '@/lib/api';
-import { cn } from '@/lib/utils';
+import { cn, formatTankCode } from '@/lib/utils';
 import type { PondDto } from '@aqualedger/contracts';
 
 type EditTankNameButtonProps = {
@@ -96,7 +96,7 @@ export function EditTankNameButton({
 
             {code && (
               <p className="text-sm text-text-secondary">
-                {t('tanks.tankCode')}: <span className="font-semibold text-text-primary">#{code}</span>
+                {t('tanks.tankCode')}: <span className="font-semibold text-text-primary">{formatTankCode(code)}</span>
               </p>
             )}
 

@@ -1,11 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { calculateDoc, getFarmToday, parseDateOnly } from '../common/utils/date.utils';
+import { compareTankCode, normalizeTankCode } from '../common/utils/tank.utils';
 import { pondSchema, pondUpdateSchema } from '@aqualedger/validation';
-
-function compareTankCode(a: string, b: string): number {
-  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
-}
 
 @Injectable()
 export class PondsService {
@@ -29,7 +26,7 @@ export class PondsService {
           id: pond.id,
           farmId: pond.farmId,
           name: pond.name,
-          code: pond.code,
+          code: normalizeTankCode(pond.code),
           type: pond.type,
           area: pond.area?.toString() ?? null,
           status: pond.status,
@@ -46,7 +43,7 @@ export class PondsService {
     const activeCycle = await this.prisma.cultureCycle.findFirst({
       where: { pondId, status: 'ACTIVE' },
     });
-    return { ...pond, area: pond.area?.toString(), activeCycle };
+    return { ...pond, code: normalizeTankCode(pond.code), area: pond.area?.toString(), activeCycle };
   }
 
   async create(params: {
@@ -70,7 +67,7 @@ export class PondsService {
         organizationId: params.organizationId,
         farmId: params.farmId,
         name: parsed.data.name,
-        code: parsed.data.code,
+        code: normalizeTankCode(parsed.data.code),
         type: parsed.data.type,
         area: parsed.data.area,
         areaUnit: parsed.data.areaUnit,
@@ -91,7 +88,7 @@ export class PondsService {
       id: pond.id,
       farmId: pond.farmId,
       name: pond.name,
-      code: pond.code,
+      code: normalizeTankCode(pond.code),
       type: pond.type,
       area: pond.area?.toString() ?? null,
       status: pond.status,

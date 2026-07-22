@@ -2,7 +2,7 @@ import type { PondTodayStatusDto } from '@aqualedger/contracts';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { Plus } from 'lucide-react';
-import { cn, formatQty } from '@/lib/utils';
+import { cn, formatQty, formatTankCode } from '@/lib/utils';
 import { EditTankNameButton } from '@/components/EditTankNameButton';
 
 interface PondCardProps {
@@ -24,7 +24,7 @@ export function PondCard({ pond }: PondCardProps) {
           <h3 className="text-base font-bold text-primary leading-tight truncate flex-1 min-w-0">{pond.pondName}</h3>
           <EditTankNameButton pondId={pond.pondId} name={pond.pondName} code={pond.pondCode} />
           <span className="rounded-md bg-primary text-white text-[11px] font-bold px-2 py-0.5 shrink-0">
-            #{pond.pondCode}
+            {formatTankCode(pond.pondCode)}
           </span>
         </div>
       </div>
