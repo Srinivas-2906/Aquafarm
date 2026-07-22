@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { AddTankButton } from '@/components/AddTankButton';
-import { PondCard } from '@/components/PondCard';
+import { TankRowList, pondStatusesToTankRows } from '@/components/TankRowList';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
 import { formatQty } from '@/lib/utils';
@@ -224,8 +224,10 @@ export function OwnerDashboardPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
-              {data.pondStatuses.map((pond) => <PondCard key={pond.pondId} pond={pond} />)}
+            <div className="flex flex-col gap-2">
+              {data.pondStatuses.length === 0 ? null : (
+                <TankRowList tanks={pondStatusesToTankRows(data.pondStatuses)} />
+              )}
             </div>
           </>
         )}

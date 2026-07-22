@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { LogOut, CheckCircle, History, Settings, FileText, UserPlus } from 'lucide-react';
+import { LogOut, CheckCircle, History, Settings, FileText, UserPlus, Package } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, authApi, ApiError } from '@/lib/api';
@@ -17,6 +17,7 @@ export function MorePage() {
   const items = [
     // Always available
     { to: '/records', icon: FileText, label: t('nav.records') },
+    { to: '/inventory/reports', icon: Package, label: t('nav.inventoryReport') },
     // Owner-only items (routes + APIs are still owner-only)
     ...(isOwner
       ? [

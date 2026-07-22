@@ -3,6 +3,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { calculateDoc, getFarmToday, parseDateOnly } from '../common/utils/date.utils';
 import { pondSchema, pondUpdateSchema } from '@aqualedger/validation';
 
+function compareTankCode(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+}
+
 @Injectable()
 export class PondsService {
   constructor(private prisma: PrismaService) {}
@@ -12,8 +16,9 @@ export class PondsService {
     const timezone = farm?.timezone || 'Asia/Kolkata';
     const ponds = await this.prisma.pond.findMany({
       where: { farmId, status: 'ACTIVE' },
-      orderBy: { code: 'asc' },
     });
+
+    ponds.sort((a, b) => compareTankCode(a.code, b.code));
 
     const result = await Promise.all(
       ponds.map(async (pond) => {
@@ -143,6 +148,25 @@ export class PondsService {
       status: updated.status,
       activeCycle: activeCycle ? this.mapActiveCycle(activeCycle, timezone) : null,
     };
+  }
+
+  async archive(params: { farmId: string; pondId: string; organizationId: string }) {
+    const pond = await this.prisma.pond.findFirst({
+      where: {
+        id: params.pondId,
+        farmId: params.farmId,
+        organizationId: params.organizationId,
+        status: 'ACTIVE',
+      },
+    });
+    if (!pond) throw new NotFoundException('Tank not found');
+
+    await this.prisma.pond.update({
+      where: { id: pond.id },
+      data: { status: 'INACTIVE' },
+    });
+
+    return { id: pond.id, archived: true as const };
   }
 
   async ensureActiveCycle(

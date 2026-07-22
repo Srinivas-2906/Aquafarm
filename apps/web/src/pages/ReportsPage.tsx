@@ -15,6 +15,7 @@ import {
   from24HourTime,
   getTodayISO,
   getYesterdayISO,
+  groupMealsByFeedSlot,
   sumKg,
 } from '@/lib/utils';
 
@@ -85,17 +86,20 @@ function entriesToDateGroups(entries: FeedingEntryDto[], feedProductIds: string[
           return feedProductIds.includes(mealProductId);
         });
       const totalKg = meals.reduce((sum, meal) => sum + (parseFloat(meal.feedQuantityKg) || 0), 0);
+      const feedSlots = groupMealsByFeedSlot(meals);
       return {
         date: entryDateISO(entry),
         doc: entry.doc,
         totalKg: totalKg.toFixed(3),
-        feeds: meals.map((meal) => ({
-          key: meal.id,
-          label: `Feed ${meal.mealNumber}`,
-          feedCode: meal.feedCode || entry.feedCode || '—',
-          quantity: formatQty(meal.feedQuantityKg),
-          time: formatMealTime(meal.actualTime),
-        })),
+        feeds: feedSlots.flatMap((slotMeals, slotIndex) =>
+          slotMeals.map((meal) => ({
+            key: meal.id,
+            label: `Feed ${slotIndex + 1}`,
+            feedCode: meal.feedCode || entry.feedCode || '—',
+            quantity: formatQty(meal.feedQuantityKg),
+            time: formatMealTime(meal.actualTime),
+          })),
+        ),
       };
     })
     .filter((group) => group.feeds.length > 0);

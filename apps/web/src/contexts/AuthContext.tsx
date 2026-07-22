@@ -7,7 +7,7 @@ interface AuthContextType {
   user: AuthUser | null;
   isLoading: boolean;
   selectedFarmId: string | null;
-  setSelectedFarmId: (id: string) => void;
+  setSelectedFarmId: (id: string | null) => void;
   login: (phone: string, pin: string) => Promise<void>;
   signupOwner: (input: {
     organizationName: string;
@@ -117,9 +117,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSelectedFarmId(null);
   }, []);
 
-  const handleSetFarm = useCallback((id: string) => {
+  const handleSetFarm = useCallback((id: string | null) => {
     setSelectedFarmId(id);
-    localStorage.setItem('selectedFarmId', id);
+    if (id) localStorage.setItem('selectedFarmId', id);
+    else localStorage.removeItem('selectedFarmId');
   }, []);
 
   return (

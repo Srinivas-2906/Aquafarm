@@ -123,6 +123,7 @@ export const api = {
     requestJson<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   put: <T>(path: string, body?: unknown) =>
     requestJson<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
+  delete: <T>(path: string) => requestJson<T>(path, { method: 'DELETE' }),
   file: (path: string) => requestFile(path),
 };
 

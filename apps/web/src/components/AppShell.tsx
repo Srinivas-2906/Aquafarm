@@ -1,10 +1,11 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Utensils, Package, LayoutDashboard, MoreHorizontal, Calculator, X, ArrowLeft, ChevronDown } from 'lucide-react';
+import { Utensils, Package, LayoutDashboard, MoreHorizontal, Calculator, X, ArrowLeft, ChevronDown, List } from 'lucide-react';
 import { ConnectivityBanner } from '@/hooks/useOnline';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import type { FarmDto } from '@aqualedger/contracts';
 import { useState } from 'react';
 
@@ -146,6 +147,7 @@ function MainNav() {
 
 function FarmHeaderSelect() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { user, selectedFarmId, setSelectedFarmId } = useAuth();
 
   const { data: farms, isLoading } = useQuery({
@@ -163,37 +165,84 @@ function FarmHeaderSelect() {
   }
 
   return (
-    <div className="relative w-full max-w-[220px]">
-      <select
-        value={selectedFarmId ?? ''}
-        onChange={(e) => setSelectedFarmId(e.target.value)}
-        className="w-full appearance-none bg-white/15 border border-white/35 text-white font-semibold text-base rounded-lg pl-3 pr-9 py-2 truncate"
-        aria-label={t('farms.selectFarm')}
+    <div className="flex items-center gap-1.5 w-full max-w-[min(100%,280px)]">
+      <div className="relative flex-1 min-w-0">
+        <select
+          value={selectedFarmId ?? ''}
+          onChange={(e) => setSelectedFarmId(e.target.value)}
+          className="w-full appearance-none bg-white/15 border border-white/35 text-white font-semibold text-base rounded-lg pl-3 pr-9 py-2 truncate"
+          aria-label={t('farms.selectFarm')}
+        >
+          {farms.map((farm) => (
+            <option key={farm.id} value={farm.id} className="text-text-primary">
+              {farm.name}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={18} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-white/90" />
+      </div>
+      <button
+        type="button"
+        onClick={() => navigate('/select-farm')}
+        className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-white/15 border border-white/35 text-white"
+        aria-label={t('farms.viewAll')}
+        title={t('farms.viewAll')}
       >
-        {farms.map((farm) => (
-          <option key={farm.id} value={farm.id} className="text-text-primary">
-            {farm.name}
-          </option>
-        ))}
-      </select>
-      <ChevronDown size={18} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-white/90" />
+        <List size={18} />
+      </button>
     </div>
   );
 }
 
+function isNavItemActive(pathname: string, to: string): boolean {
+  if (to === '/dashboard') {
+    return pathname === '/dashboard' || pathname === '/';
+  }
+  if (to === '/more') {
+    return (
+      pathname === '/more' ||
+      pathname.startsWith('/records') ||
+      pathname.startsWith('/reports') ||
+      pathname.startsWith('/inventory/reports') ||
+      pathname.startsWith('/approvals') ||
+      pathname.startsWith('/audit') ||
+      pathname.startsWith('/settings') ||
+      pathname.startsWith('/invite-supervisor')
+    );
+  }
+  return pathname === to || pathname.startsWith(`${to}/`);
+}
+
 function NavItems({ items }: { items: Array<{ to: string; icon: React.ComponentType<{ size?: number | string }>; label: string }> }) {
+  const { pathname } = useLocation();
+
   return (
-    <div className="flex justify-around items-stretch">
-      {items.map(({ to, icon: Icon, label }) => (
-        <Link
-          key={to}
-          to={to}
-          className="relative z-10 flex flex-col items-center justify-center py-2 px-3 min-h-touch min-w-touch text-text-secondary hover:text-primary active:text-primary touch-manipulation"
-        >
-          <Icon size={22} />
-          <span className="text-xs mt-0.5 font-medium">{label}</span>
-        </Link>
-      ))}
+    <div className="flex justify-around items-stretch px-1 pt-1">
+      {items.map(({ to, icon: Icon, label }) => {
+        const active = isNavItemActive(pathname, to);
+        return (
+          <Link
+            key={to}
+            to={to}
+            aria-current={active ? 'page' : undefined}
+            className={cn(
+              'relative z-10 flex flex-1 flex-col items-center justify-center py-1.5 px-1 min-h-touch touch-manipulation rounded-lg transition-colors',
+              active
+                ? 'text-primary bg-primary-light/60'
+                : 'text-text-secondary hover:text-primary active:text-primary',
+            )}
+          >
+            {active && (
+              <span
+                className="absolute top-0 left-1/2 -translate-x-1/2 w-7 h-0.5 rounded-full bg-primary"
+                aria-hidden
+              />
+            )}
+            <Icon size={22} />
+            <span className={cn('text-xs mt-0.5', active ? 'font-bold' : 'font-medium')}>{label}</span>
+          </Link>
+        );
+      })}
     </div>
   );
 }

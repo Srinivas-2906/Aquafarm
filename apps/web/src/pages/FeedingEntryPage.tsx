@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Plus, Pencil, ChevronDown, Minus, BarChart3, Copy } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { AddTankButton } from '@/components/AddTankButton';
-import { EditTankNameButton } from '@/components/EditTankNameButton';
+import { TankRowList, pondsToTankRows } from '@/components/TankRowList';
 import { FeedCodeCheckboxDropdown } from '@/components/FeedCodeCheckboxDropdown';
 import { RecordLockNotice } from '@/components/RecordLockNotice';
 import { useAuth } from '@/contexts/AuthContext';
@@ -27,7 +27,7 @@ import {
   isSupervisorEditableDate,
   type QuantityUnit,
 } from '@/lib/utils';
-import type { PondDto, FeedProductDto, FeedingEntryDto } from '@aqualedger/contracts';
+import type { PondDto, FeedProductDto, FeedingEntryDto, FeedingMealDto } from '@aqualedger/contracts';
 
 const FEED_CODE_ORDER = ['1C', '2C', '20', '3S', '3SP', '3P'];
 
@@ -37,7 +37,23 @@ function sortFeedProducts(products: FeedProductDto[]): FeedProductDto[] {
   );
 }
 
-type FeedRow = {
+type FeedLine = {
+  key: string;
+  mealId?: string;
+  feedProductId: string;
+  quantity: string;
+  quantityUnit: QuantityUnit;
+};
+
+type FeedSlot = {
+  key: string;
+  slotNumber: number;
+  hour: string;
+  ampm: 'AM' | 'PM';
+  lines: FeedLine[];
+};
+
+type FlatFeedRow = {
   key: string;
   mealId?: string;
   mealNumber: number;
@@ -48,62 +64,128 @@ type FeedRow = {
   ampm: 'AM' | 'PM';
 };
 
-function defaultRow(mealNumber = 1, feedProductId = ''): FeedRow {
-  const { hour, ampm } = from24HourTime(getDefaultMealTime());
-  return { key: uuidv4(), mealNumber, feedProductId, quantity: '', quantityUnit: 'kg', hour, ampm };
+function defaultLine(feedProductId = ''): FeedLine {
+  return { key: uuidv4(), feedProductId, quantity: '', quantityUnit: 'kg' };
 }
 
-function rowsFromEntry(entry: FeedingEntryDto): FeedRow[] {
+function defaultSlot(slotNumber = 1, feedProductId = ''): FeedSlot {
+  const { hour, ampm } = from24HourTime(getDefaultMealTime());
+  return {
+    key: uuidv4(),
+    slotNumber,
+    hour,
+    ampm,
+    lines: [defaultLine(feedProductId)],
+  };
+}
+
+function slotsFromEntry(entry: FeedingEntryDto): FeedSlot[] {
   if (!entry.meals.length) return [];
-  return entry.meals
-    .sort((a, b) => a.mealNumber - b.mealNumber)
-    .map((meal) => {
-      const { hour, ampm } = from24HourTime(meal.actualTime || getDefaultMealTime());
-      return {
-        key: meal.id,
-        mealId: meal.id,
-        mealNumber: meal.mealNumber,
-        feedProductId: meal.feedProductId || entry.feedProductId,
-        quantity: meal.feedQuantityKg,
-        quantityUnit: 'kg' as const,
+  const sorted = [...entry.meals].sort((a, b) => a.mealNumber - b.mealNumber);
+  const slots: FeedSlot[] = [];
+  const timeIndex = new Map<string, FeedSlot>();
+
+  for (const meal of sorted) {
+    const time = meal.actualTime || getDefaultMealTime();
+    let slot = timeIndex.get(time);
+    if (!slot) {
+      const { hour, ampm } = from24HourTime(time);
+      slot = {
+        key: uuidv4(),
+        slotNumber: slots.length + 1,
         hour,
         ampm,
+        lines: [],
       };
+      timeIndex.set(time, slot);
+      slots.push(slot);
+    }
+    slot.lines.push({
+      key: meal.id,
+      mealId: meal.id,
+      feedProductId: meal.feedProductId || entry.feedProductId,
+      quantity: meal.feedQuantityKg,
+      quantityUnit: 'kg',
     });
+  }
+
+  return slots.map((slot, index) => ({ ...slot, slotNumber: index + 1 }));
 }
 
-function rowsFromCopiedEntry(
+function slotsFromCopiedEntry(
   sourceEntry: FeedingEntryDto,
   targetEntry?: FeedingEntryDto | null,
-): FeedRow[] {
+): FeedSlot[] {
   if (!sourceEntry.meals.length) return [];
-  const existingSorted = targetEntry?.meals.length
-    ? [...targetEntry.meals].sort((a, b) => a.mealNumber - b.mealNumber)
-    : [];
+  const targetByTime = new Map<string, FeedingMealDto[]>();
+  if (targetEntry?.meals.length) {
+    for (const meal of targetEntry.meals) {
+      const time = meal.actualTime || getDefaultMealTime();
+      const list = targetByTime.get(time) ?? [];
+      list.push(meal);
+      targetByTime.set(time, list);
+    }
+  }
 
-  return sourceEntry.meals
-    .sort((a, b) => a.mealNumber - b.mealNumber)
-    .map((meal, index) => {
-      const { hour, ampm } = from24HourTime(meal.actualTime || getDefaultMealTime());
-      const existingMeal = existingSorted[index];
-      return {
-        key: existingMeal?.id ?? uuidv4(),
-        mealId: existingMeal?.id,
-        mealNumber: existingMeal?.mealNumber ?? index + 1,
-        feedProductId: meal.feedProductId || sourceEntry.feedProductId,
-        quantity: meal.feedQuantityKg,
-        quantityUnit: 'kg' as const,
+  const slots: FeedSlot[] = [];
+  const timeIndex = new Map<string, FeedSlot>();
+
+  for (const meal of [...sourceEntry.meals].sort((a, b) => a.mealNumber - b.mealNumber)) {
+    const time = meal.actualTime || getDefaultMealTime();
+    let slot = timeIndex.get(time);
+    if (!slot) {
+      const { hour, ampm } = from24HourTime(time);
+      slot = {
+        key: uuidv4(),
+        slotNumber: slots.length + 1,
         hour,
         ampm,
+        lines: [],
       };
+      timeIndex.set(time, slot);
+      slots.push(slot);
+    }
+    const targetMeals = targetByTime.get(time);
+    const targetMeal = targetMeals?.shift();
+    slot.lines.push({
+      key: targetMeal?.id ?? uuidv4(),
+      mealId: targetMeal?.id,
+      feedProductId: meal.feedProductId || sourceEntry.feedProductId,
+      quantity: meal.feedQuantityKg,
+      quantityUnit: 'kg',
     });
+  }
+
+  return slots.map((slot, index) => ({ ...slot, slotNumber: index + 1 }));
 }
 
-function codeIdsFromEntry(entry: FeedingEntryDto): string[] {
-  const ids = entry.meals
-    .map((meal) => meal.feedProductId || entry.feedProductId)
-    .filter(Boolean);
-  return [...new Set(ids)];
+function flattenFilledSlots(slots: FeedSlot[]): FlatFeedRow[] {
+  const filled: FlatFeedRow[] = [];
+  let mealNumber = 0;
+
+  for (const slot of slots) {
+    for (const line of slot.lines) {
+      const quantity = formatFeedQtyKg(line.quantity, line.quantityUnit);
+      if (!quantity) continue;
+      mealNumber += 1;
+      filled.push({
+        key: line.key,
+        mealId: line.mealId,
+        mealNumber,
+        feedProductId: line.feedProductId,
+        quantity,
+        quantityUnit: 'kg',
+        hour: slot.hour,
+        ampm: slot.ampm,
+      });
+    }
+  }
+
+  return filled;
+}
+
+function slotHasQuantity(slot: FeedSlot): boolean {
+  return slot.lines.some((line) => formatFeedQtyKg(line.quantity, line.quantityUnit));
 }
 
 function readError(err: unknown, fallback: string): string {
@@ -135,8 +217,7 @@ export function FeedingEntryPage() {
   const [selectedPondId, setSelectedPondId] = useState(pondIdParam);
   const [feedingDate, setFeedingDate] = useState(getTodayISO());
   const [feedProductId, setFeedProductId] = useState('');
-  const [rows, setRows] = useState<FeedRow[]>([defaultRow()]);
-  const [selectedCodeIds, setSelectedCodeIds] = useState<string[]>([]);
+  const [slots, setSlots] = useState<FeedSlot[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState(false);
@@ -177,11 +258,27 @@ export function FeedingEntryPage() {
       setSelectedPondId(entryById.pondId);
       setFeedingDate(entryById.feedingDate.split('T')[0]);
       setFeedProductId(entryById.feedProductId);
-      setSelectedCodeIds(codeIdsFromEntry(entryById));
-      setRows(rowsFromEntry(entryById));
+      setSlots(slotsFromEntry(entryById));
       setMode('view');
     }
   }, [entryById]);
+
+  const { data: pondStatuses } = useQuery({
+    queryKey: ['pond-status', selectedFarmId],
+    queryFn: () =>
+      api.get<import('@aqualedger/contracts').PondTodayStatusDto[]>(
+        `/dashboard/pond-status?farmId=${selectedFarmId}`,
+      ),
+    enabled: !!selectedFarmId && !selectedPondId && !entryId,
+  });
+
+  const pondStatusById = useMemo(() => {
+    const map = new Map<string, import('@aqualedger/contracts').PondTodayStatusDto>();
+    for (const status of pondStatuses ?? []) {
+      map.set(status.pondId, status);
+    }
+    return map;
+  }, [pondStatuses]);
 
   const { data: ponds } = useQuery({
     queryKey: ['ponds', selectedFarmId],
@@ -217,9 +314,8 @@ export function FeedingEntryPage() {
     if (!existingEntry) return;
     if (copiedDraftRef.current) return;
 
-    setRows(rowsFromEntry(existingEntry));
+    setSlots(slotsFromEntry(existingEntry));
     setFeedProductId(existingEntry.feedProductId);
-    setSelectedCodeIds(codeIdsFromEntry(existingEntry));
     setMode('view');
   }, [existingEntry, entryId, entryLoaded, selectedPondId, selectedFarmId, feedingDate]);
 
@@ -229,10 +325,7 @@ export function FeedingEntryPage() {
     if (!sortedFeedProducts?.length) return;
     if (copiedDraftRef.current) return;
 
-    const defaultId =
-      sortedFeedProducts.find((fp) => fp.feedCode === '1C')?.id || sortedFeedProducts[0].id;
-    setSelectedCodeIds(defaultId ? [defaultId] : []);
-    setRows([]);
+    setSlots([]);
     setMode('add');
     setSaveOk(false);
   }, [existingEntry, entryId, entryLoaded, selectedPondId, selectedFarmId, feedingDate, sortedFeedProducts]);
@@ -252,14 +345,10 @@ export function FeedingEntryPage() {
   const activeEntry = entryById || existingEntry;
   const resolvedFeedProductId =
     feedProductId || sortedFeedProducts?.find((fp) => fp.feedCode === '1C')?.id || sortedFeedProducts?.[0]?.id || '';
-  const activeCodeProducts = useMemo(
-    () => sortedFeedProducts?.filter((fp) => selectedCodeIds.includes(fp.id)) ?? [],
-    [sortedFeedProducts, selectedCodeIds],
-  );
   const canEditDate = isSupervisorEditableDate(feedingDate);
   const canEdit = isOwner || (activeEntry?.isEditable ?? canEditDate);
   const hasPersistedMeals =
-    rows.some((row) => row.mealId) ||
+    slots.some((slot) => slot.lines.some((line) => line.mealId)) ||
     (activeEntry?.meals.length ?? 0) > 0 ||
     parseFloat(activeEntry?.totalDailyFeedKg ?? '0') > 0;
   const hasSavedEntry = hasPersistedMeals;
@@ -270,10 +359,14 @@ export function FeedingEntryPage() {
     '—';
 
   const dayTotal = useMemo(() => {
-    const rowTotal = rows.reduce((sum, row) => sum + quantityToKg(row.quantity, row.quantityUnit), 0);
+    const rowTotal = slots.reduce(
+      (sum, slot) =>
+        sum + slot.lines.reduce((lineSum, line) => lineSum + quantityToKg(line.quantity, line.quantityUnit), 0),
+      0,
+    );
     if (rowTotal > 0) return rowTotal.toFixed(1);
     return activeEntry?.totalDailyFeedKg || '0';
-  }, [rows, activeEntry]);
+  }, [slots, activeEntry]);
 
   const goToTankList = () => {
     navigate('/feeding/entry');
@@ -334,10 +427,9 @@ export function FeedingEntryPage() {
         });
         return;
       }
-      const copiedRows = rowsFromCopiedEntry(sourceEntry, activeEntry);
+      const copiedSlots = slotsFromCopiedEntry(sourceEntry, activeEntry);
       copiedDraftRef.current = true;
-      setRows(copiedRows);
-      setSelectedCodeIds(codeIdsFromEntry(sourceEntry));
+      setSlots(copiedSlots);
       setFeedProductId(sourceEntry.feedProductId);
       setMode(hasSavedEntry ? 'edit' : 'add');
       setCopyFeedback({
@@ -408,8 +500,6 @@ export function FeedingEntryPage() {
 
   const startEditing = () => {
     setMode('edit');
-    const ids = [...new Set(rows.map((row) => row.feedProductId).filter(Boolean))];
-    if (ids.length) setSelectedCodeIds(ids);
     setSaveError(null);
     setSaveOk(false);
   };
@@ -420,86 +510,91 @@ export function FeedingEntryPage() {
     setSaveOk(false);
     if (activeEntry) {
       setFeedProductId(activeEntry.feedProductId);
-      setSelectedCodeIds(codeIdsFromEntry(activeEntry));
-      setRows(rowsFromEntry(activeEntry));
+      setSlots(slotsFromEntry(activeEntry));
     }
   };
 
-  const updateRow = (key: string, patch: Partial<FeedRow>) => {
-    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  const updateSlot = (slotKey: string, patch: Partial<Pick<FeedSlot, 'hour' | 'ampm'>>) => {
+    setSlots((current) =>
+      current.map((slot) => (slot.key === slotKey ? { ...slot, ...patch } : slot)),
+    );
     setSaveError(null);
     setSaveOk(false);
   };
 
-  const toggleFeedCode = (productId: string, rowKey: string, mode: 'add' | 'remove') => {
-    if (mode === 'remove') {
-      setSelectedCodeIds((current) => {
-        const next = current.filter((id) => id !== productId);
-        setRows((rowsCurrent) =>
-          rowsCurrent.map((row) => {
-            if (row.mealId || row.feedProductId !== productId) return row;
-            return { ...row, feedProductId: next[0] || '' };
-          }),
-        );
-        return next;
-      });
+  const updateLine = (slotKey: string, lineKey: string, patch: Partial<FeedLine>) => {
+    setSlots((current) =>
+      current.map((slot) => {
+        if (slot.key !== slotKey) return slot;
+        return {
+          ...slot,
+          lines: slot.lines.map((line) => (line.key === lineKey ? { ...line, ...patch } : line)),
+        };
+      }),
+    );
+    setSaveError(null);
+    setSaveOk(false);
+  };
+
+  const pickDefaultProductId = (usedIds: Set<string>) =>
+    sortedFeedProducts?.find((product) => !usedIds.has(product.id))?.id ||
+    sortedFeedProducts?.find((fp) => fp.feedCode === '1C')?.id ||
+    sortedFeedProducts?.[0]?.id ||
+    resolvedFeedProductId;
+
+  const addSlot = () => {
+    if (hasSavedEntry && mode === 'view') {
+      setMode('edit');
       setSaveError(null);
       setSaveOk(false);
-      return;
     }
+    const nextNumber = Math.max(0, ...slots.map((slot) => slot.slotNumber)) + 1;
+    const usedIds = new Set(
+      slots.flatMap((slot) => slot.lines.map((line) => line.feedProductId).filter(Boolean)),
+    );
+    setSlots((current) => [...current, defaultSlot(nextNumber, pickDefaultProductId(usedIds))]);
+  };
 
-    setSelectedCodeIds((current) => {
-      if (current.includes(productId)) return current;
+  const addLineToSlot = (slotKey: string) => {
+    setSlots((current) =>
+      current.map((slot) => {
+        if (slot.key !== slotKey) return slot;
+        const usedIds = new Set(slot.lines.map((line) => line.feedProductId).filter(Boolean));
+        return {
+          ...slot,
+          lines: [...slot.lines, defaultLine(pickDefaultProductId(usedIds))],
+        };
+      }),
+    );
+    setSaveError(null);
+    setSaveOk(false);
+  };
 
-      const next = [...current, productId];
-      setRows((rowsCurrent) => {
-        const target = rowsCurrent.find((row) => row.key === rowKey);
-        const targetQty = target ? formatFeedQtyKg(target.quantity, target.quantityUnit) : '';
-        const targetHasDifferentCode =
-          !!target?.feedProductId && target.feedProductId !== productId;
-
-        if (!targetQty && !targetHasDifferentCode) {
-          return rowsCurrent.map((row) =>
-            row.key === rowKey ? { ...row, feedProductId: productId } : row,
-          );
-        }
-
-        const alreadyHasRow = rowsCurrent.some(
-          (row) => row.feedProductId === productId && !row.mealId,
-        );
-        if (alreadyHasRow) return rowsCurrent;
-
-        const nextNumber = Math.max(0, ...rowsCurrent.map((r) => r.mealNumber)) + 1;
-        return [...rowsCurrent, defaultRow(nextNumber, productId)];
-      });
+  const removeLine = (slotKey: string, lineKey: string) => {
+    if (mode === 'view') return;
+    if (hasSavedEntry && mode !== 'edit') return;
+    setSlots((current) => {
+      const next = current
+        .map((slot) => {
+          if (slot.key !== slotKey) return slot;
+          const lines = slot.lines.filter((line) => line.key !== lineKey);
+          return lines.length ? { ...slot, lines } : null;
+        })
+        .filter((slot): slot is FeedSlot => slot !== null)
+        .map((slot, index) => ({ ...slot, slotNumber: index + 1 }));
       return next;
     });
     setSaveError(null);
     setSaveOk(false);
   };
 
-  const addRow = () => {
-    if (hasSavedEntry && mode === 'view') {
-      setMode('edit');
-      setSaveError(null);
-      setSaveOk(false);
-    }
-    const nextNumber = Math.max(0, ...rows.map((r) => r.mealNumber)) + 1;
-    const usedIds = new Set(rows.map((row) => row.feedProductId).filter(Boolean));
-    const nextProduct =
-      activeCodeProducts.find((product) => !usedIds.has(product.id)) ||
-      activeCodeProducts[0];
-    const defaultProductId = nextProduct?.id || resolvedFeedProductId;
-    setRows((current) => [...current, defaultRow(nextNumber, defaultProductId)]);
-  };
-
-  const removeRow = (key: string) => {
+  const removeSlot = (slotKey: string) => {
     if (mode === 'view') return;
     if (hasSavedEntry && mode !== 'edit') return;
-    setRows((current) =>
+    setSlots((current) =>
       current
-        .filter((row) => row.key !== key)
-        .map((row, index) => ({ ...row, mealNumber: index + 1 })),
+        .filter((slot) => slot.key !== slotKey)
+        .map((slot, index) => ({ ...slot, slotNumber: index + 1 })),
     );
     setSaveError(null);
     setSaveOk(false);
@@ -518,20 +613,10 @@ export function FeedingEntryPage() {
     return pond;
   };
 
-  const buildOrderedFilledRows = (sourceRows: FeedRow[]) =>
-    sourceRows
-      .map((row) => ({
-        ...row,
-        quantity: formatFeedQtyKg(row.quantity, row.quantityUnit),
-        quantityUnit: 'kg' as const,
-      }))
-      .filter((row) => row.quantity)
-      .map((row, index) => ({ ...row, mealNumber: index + 1 }));
-
   const clearAllMeals = async (entry: FeedingEntryDto) =>
     api.post<{ cleared: true }>(`/feeding-entries/${entry.id}/clear-meals`);
 
-  const syncMeals = async (entry: FeedingEntryDto, filled: FeedRow[]) =>
+  const syncMeals = async (entry: FeedingEntryDto, filled: FlatFeedRow[]) =>
     api.put<FeedingEntryDto | null>(`/feeding-entries/${entry.id}/meals`, {
       meals: filled.map((row) => ({
         id: row.mealId,
@@ -542,8 +627,8 @@ export function FeedingEntryPage() {
     });
 
   const isEditingRows = mode === 'edit' || (mode === 'add' && !hasSavedEntry);
-  const hasRowQuantity = rows.some((row) => formatFeedQtyKg(row.quantity, row.quantityUnit));
-  const clearingEntry = rows.length === 0 && !!activeEntry && mode === 'edit';
+  const hasRowQuantity = slots.some((slot) => slotHasQuantity(slot));
+  const clearingEntry = slots.length === 0 && !!activeEntry && mode === 'edit';
   const canSave = hasRowQuantity || clearingEntry;
 
   const applySavedEntryState = (latest: FeedingEntryDto | null | undefined) => {
@@ -552,8 +637,7 @@ export function FeedingEntryPage() {
     if (latest) {
       queryClient.setQueryData(['feeding-entry-by-date', selectedPondId, feedingDate], latest);
       setFeedProductId(latest.feedProductId);
-      setSelectedCodeIds(codeIdsFromEntry(latest));
-      setRows(rowsFromEntry(latest));
+      setSlots(slotsFromEntry(latest));
       setMode('view');
       return;
     }
@@ -561,8 +645,7 @@ export function FeedingEntryPage() {
     queryClient.setQueryData(['feeding-entry-by-date', selectedPondId, feedingDate], null);
     const defaultId =
       sortedFeedProducts?.find((fp) => fp.feedCode === '1C')?.id || sortedFeedProducts?.[0]?.id || '';
-    setRows([]);
-    setSelectedCodeIds(defaultId ? [defaultId] : []);
+    setSlots([]);
     setFeedProductId(defaultId);
     setMode('add');
   };
@@ -570,7 +653,7 @@ export function FeedingEntryPage() {
   const handleSaveAll = async () => {
     if (!selectedFarmId) return;
 
-    const filled = buildOrderedFilledRows(rows);
+    const filled = flattenFilledSlots(slots);
 
     if (!filled.length && !hasSavedEntry && !activeEntry) return;
     if (filled.length && !resolvedFeedProductId) {
@@ -684,30 +767,10 @@ export function FeedingEntryPage() {
             <AddTankButton compact onCreated={(pond) => handleTankPick(pond.id)} />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            {ponds?.map((pond) => (
-              <div
-                key={pond.id}
-                className="relative card text-left min-h-[88px] border-2 border-primary/30 bg-primary-light/40"
-              >
-                <button
-                  type="button"
-                  onClick={() => handleTankPick(pond.id)}
-                  className="w-full h-full p-4 text-left"
-                >
-                  <div className="flex items-start justify-between gap-2 pr-7">
-                    <h3 className="text-base font-bold text-primary">{pond.name}</h3>
-                    <span className="rounded-md bg-primary text-white text-xs font-bold px-2 py-0.5 shrink-0">
-                      #{pond.code}
-                    </span>
-                  </div>
-                </button>
-                <div className="absolute top-2 right-2 z-10">
-                  <EditTankNameButton pondId={pond.id} name={pond.name} code={pond.code} />
-                </div>
-              </div>
-            ))}
-          </div>
+          <TankRowList
+            tanks={pondsToTankRows(ponds ?? [], pondStatusById)}
+            onSelect={handleTankPick}
+          />
 
           {!ponds?.length && (
             <div className="card space-y-3">
@@ -836,32 +899,28 @@ export function FeedingEntryPage() {
             )}
           </div>
 
-          {rows.length === 0 && (
+          {slots.length === 0 && (
             <p className="text-sm text-text-secondary text-center py-6">{t('feeding.noMealsYet')}</p>
           )}
 
-          {rows.map((row, index) => {
-            const isSavedRow = !!row.mealId;
+          {slots.map((slot) => {
             const isViewMode = (hasSavedEntry && mode === 'view') || !canEdit;
-            const isAddLockedRow = mode === 'add' && isSavedRow;
-            const rowEditable = canEdit && !isViewMode && !isAddLockedRow;
-            const showReadonly = isViewMode || isAddLockedRow;
-            const rowFeedCode =
-              sortedFeedProducts?.find((fp) => fp.id === row.feedProductId)?.feedCode ||
-              activeEntry?.meals.find((m) => m.id === row.mealId)?.feedCode ||
-              feedCodeLabel;
+            const slotHasSavedLines = slot.lines.some((line) => line.mealId);
+            const isAddLockedSlot = mode === 'add' && slotHasSavedLines;
+            const slotEditable = canEdit && !isViewMode && !isAddLockedSlot;
+            const showReadonly = isViewMode || isAddLockedSlot;
             const showFeedCodePicker = !showReadonly && !!sortedFeedProducts?.length;
-            const canDeleteRow = canEdit && isEditingRows && rows.length > 0;
-            const feedLabel = t('feeding.feedLabel', { number: index + 1 });
+            const canDeleteSlot = canEdit && isEditingRows;
+            const feedLabel = t('feeding.feedLabel', { number: slot.slotNumber });
 
             return (
-              <div key={row.key} className="rounded-lg border border-border bg-surface p-2 space-y-1.5">
+              <div key={slot.key} className="rounded-lg border border-border bg-surface p-2 space-y-1.5">
                 <div className="flex items-center justify-between gap-2 px-0.5">
                   <p className="text-xs font-semibold text-primary">{feedLabel}</p>
-                  {canDeleteRow && (
+                  {canDeleteSlot && (
                     <button
                       type="button"
-                      onClick={() => removeRow(row.key)}
+                      onClick={() => removeSlot(slot.key)}
                       className="min-h-0 min-w-0 w-7 h-7 flex items-center justify-center rounded-md border border-danger/30 bg-danger/5 text-danger hover:bg-danger/10 hover:border-danger/50"
                       aria-label={t('feeding.removeFeed')}
                     >
@@ -869,94 +928,142 @@ export function FeedingEntryPage() {
                     </button>
                   )}
                 </div>
-                <div className="grid grid-cols-[68px_1fr_minmax(0,1.05fr)] gap-2 items-center">
-                  {showReadonly ? (
-                    <>
-                      <span className="text-sm font-semibold text-primary px-1">{rowFeedCode}</span>
-                      <span className="text-sm font-semibold px-1">{formatQty(row.quantity)}</span>
-                      <span className="text-sm font-semibold px-1">{row.hour} {row.ampm}</span>
-                    </>
-                  ) : (
-                    <>
-                      {showFeedCodePicker ? (
-                        <FeedCodeCheckboxDropdown
-                          products={sortedFeedProducts!}
-                          selectedCodeIds={selectedCodeIds}
-                          rowProductId={row.feedProductId}
-                          rowKey={row.key}
-                          disabled={!rowEditable}
-                          onToggleCode={toggleFeedCode}
-                          onAssignRow={(productId) => updateRow(row.key, { feedProductId: productId })}
-                        />
-                      ) : (
-                        <span className="text-sm font-semibold text-primary px-1">{rowFeedCode}</span>
-                      )}
 
-                      <div className="relative min-w-0">
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={row.quantity}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            if (v === '' || /^\d*\.?\d{0,3}$/.test(v)) {
-                              updateRow(row.key, { quantity: v });
-                            }
-                          }}
-                          disabled={!rowEditable}
-                          className="input-compact w-full !py-2 !pl-2 !pr-[3.25rem] !text-sm font-semibold disabled:opacity-60"
-                          placeholder="0"
-                        />
-                        <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
-                          <div className="relative flex items-center">
-                            <select
-                              value={row.quantityUnit}
-                              onChange={(e) => {
-                                const nextUnit = e.target.value as QuantityUnit;
-                                updateRow(row.key, {
-                                  quantityUnit: nextUnit,
-                                  quantity: convertQuantityUnit(row.quantity, row.quantityUnit, nextUnit),
-                                });
-                              }}
-                              disabled={!rowEditable}
-                              aria-label={t('feeding.quantityUnit')}
-                              className="appearance-none bg-transparent border-0 py-0 pl-0 pr-3.5 text-[11px] font-semibold text-text-secondary cursor-pointer focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
-                            >
-                              <option value="kg">{t('common.kg')}</option>
-                              <option value="ton">{t('common.ton')}</option>
-                            </select>
-                            <ChevronDown
-                              size={12}
-                              className="absolute right-0 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none"
-                            />
-                          </div>
-                        </div>
-                      </div>
+                <div className="space-y-2">
+                  {slot.lines.map((line, lineIndex) => {
+                    const lineFeedCode =
+                      sortedFeedProducts?.find((fp) => fp.id === line.feedProductId)?.feedCode ||
+                      activeEntry?.meals.find((m) => m.id === line.mealId)?.feedCode ||
+                      feedCodeLabel;
+                    const canRemoveLine = slotEditable && slot.lines.length > 1;
+                    const isFirstLine = lineIndex === 0;
 
-                      <div className="flex items-center gap-1 min-w-0">
-                        <select
-                          value={row.hour}
-                          onChange={(e) => updateRow(row.key, { hour: e.target.value })}
-                          disabled={!rowEditable}
-                          className="input-compact flex-1 min-w-0 !py-2 !px-1 !text-sm text-center disabled:opacity-60"
-                        >
-                          {Array.from({ length: 12 }, (_, i) => String(i + 1)).map((h) => (
-                            <option key={h} value={h}>{h}</option>
-                          ))}
-                        </select>
-                        <select
-                          value={row.ampm}
-                          onChange={(e) => updateRow(row.key, { ampm: e.target.value as 'AM' | 'PM' })}
-                          disabled={!rowEditable}
-                          className="input-compact w-12 !py-2 !px-0.5 !text-xs font-semibold text-center disabled:opacity-60"
-                        >
-                          <option value="AM">AM</option>
-                          <option value="PM">PM</option>
-                        </select>
+                    return (
+                      <div
+                        key={line.key}
+                        className="grid grid-cols-[68px_1fr_minmax(0,1.05fr)] gap-2 items-center"
+                      >
+                        {showReadonly ? (
+                          <>
+                            <span className="text-sm font-semibold text-primary px-1">{lineFeedCode}</span>
+                            <span className="text-sm font-semibold px-1">{formatQty(line.quantity)}</span>
+                            <span className="text-sm font-semibold px-1">
+                              {isFirstLine ? `${slot.hour} ${slot.ampm}` : ''}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            {showFeedCodePicker ? (
+                              <FeedCodeCheckboxDropdown
+                                products={sortedFeedProducts!}
+                                rowProductId={line.feedProductId}
+                                disabled={!slotEditable}
+                                onSelectCode={(productId) =>
+                                  updateLine(slot.key, line.key, { feedProductId: productId })
+                                }
+                              />
+                            ) : (
+                              <span className="text-sm font-semibold text-primary px-1">{lineFeedCode}</span>
+                            )}
+
+                            <div className="relative min-w-0">
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={line.quantity}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v === '' || /^\d*\.?\d{0,3}$/.test(v)) {
+                                    updateLine(slot.key, line.key, { quantity: v });
+                                  }
+                                }}
+                                disabled={!slotEditable}
+                                className="input-compact w-full !py-2 !pl-2 !pr-[3.25rem] !text-sm font-semibold disabled:opacity-60"
+                                placeholder="0"
+                              />
+                              <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+                                <div className="relative flex items-center">
+                                  <select
+                                    value={line.quantityUnit}
+                                    onChange={(e) => {
+                                      const nextUnit = e.target.value as QuantityUnit;
+                                      updateLine(slot.key, line.key, {
+                                        quantityUnit: nextUnit,
+                                        quantity: convertQuantityUnit(
+                                          line.quantity,
+                                          line.quantityUnit,
+                                          nextUnit,
+                                        ),
+                                      });
+                                    }}
+                                    disabled={!slotEditable}
+                                    aria-label={t('feeding.quantityUnit')}
+                                    className="appearance-none bg-transparent border-0 py-0 pl-0 pr-3.5 text-[11px] font-semibold text-text-secondary cursor-pointer focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                                  >
+                                    <option value="kg">{t('common.kg')}</option>
+                                    <option value="ton">{t('common.ton')}</option>
+                                  </select>
+                                  <ChevronDown
+                                    size={12}
+                                    className="absolute right-0 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            {isFirstLine ? (
+                              <div className="flex items-center gap-1 min-w-0">
+                                <select
+                                  value={slot.hour}
+                                  onChange={(e) => updateSlot(slot.key, { hour: e.target.value })}
+                                  disabled={!slotEditable}
+                                  className="input-compact flex-1 min-w-0 !py-2 !px-1 !text-sm text-center disabled:opacity-60"
+                                >
+                                  {Array.from({ length: 12 }, (_, i) => String(i + 1)).map((h) => (
+                                    <option key={h} value={h}>{h}</option>
+                                  ))}
+                                </select>
+                                <select
+                                  value={slot.ampm}
+                                  onChange={(e) =>
+                                    updateSlot(slot.key, { ampm: e.target.value as 'AM' | 'PM' })
+                                  }
+                                  disabled={!slotEditable}
+                                  className="input-compact w-12 !py-2 !px-0.5 !text-xs font-semibold text-center disabled:opacity-60"
+                                >
+                                  <option value="AM">AM</option>
+                                  <option value="PM">PM</option>
+                                </select>
+                              </div>
+                            ) : canRemoveLine ? (
+                              <button
+                                type="button"
+                                onClick={() => removeLine(slot.key, line.key)}
+                                className="min-h-0 min-w-0 w-7 h-7 flex items-center justify-center rounded-md border border-danger/30 bg-danger/5 text-danger hover:bg-danger/10 hover:border-danger/50 justify-self-end"
+                                aria-label={t('feeding.removeCode')}
+                              >
+                                <Minus size={14} strokeWidth={2.5} />
+                              </button>
+                            ) : (
+                              <span />
+                            )}
+                          </>
+                        )}
                       </div>
-                    </>
-                  )}
+                    );
+                  })}
                 </div>
+
+                {slotEditable && (
+                  <button
+                    type="button"
+                    onClick={() => addLineToSlot(slot.key)}
+                    className="btn-secondary btn-inline flex items-center gap-1 !text-[11px] !py-1 !px-2 !min-h-0"
+                  >
+                    <Plus size={12} />
+                    {t('feeding.addCode')}
+                  </button>
+                )}
               </div>
             );
           })}
@@ -964,7 +1071,7 @@ export function FeedingEntryPage() {
           {canEdit && (
             <button
               type="button"
-              onClick={addRow}
+              onClick={addSlot}
               className="btn-secondary btn-inline flex items-center gap-1.5 !text-sm !py-2"
             >
               <Plus size={14} />

@@ -175,6 +175,11 @@ export const farmSchema = z.object({
   timezone: z.string().max(50).optional(),
 });
 
+export const farmUpdateSchema = farmSchema.partial().refine(
+  (data) => Object.keys(data).length > 0,
+  { message: 'At least one field is required' },
+);
+
 export const cultureCycleSchema = z.object({
   pondId: z.string().uuid(),
   cycleName: z.string().min(1).max(100),

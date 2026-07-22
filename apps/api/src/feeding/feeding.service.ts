@@ -957,7 +957,9 @@ export class FeedingService {
         feedCode: item.feedCode,
         totalUsedKg: item.totalUsedKg.toFixed(3),
         byPond: Array.from(item.byPond.values())
-          .sort((a, b) => a.pondCode.localeCompare(b.pondCode))
+          .sort((a, b) =>
+            a.pondCode.localeCompare(b.pondCode, undefined, { numeric: true, sensitivity: 'base' }),
+          )
           .map((pond) => ({
             pondId: pond.pondId,
             pondName: pond.pondName,
@@ -973,8 +975,8 @@ export class FeedingService {
 
     const ponds = await this.prisma.pond.findMany({
       where: { farmId, status: 'ACTIVE' },
-      orderBy: { code: 'asc' },
     });
+    ponds.sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true, sensitivity: 'base' }));
 
     return Promise.all(
       ponds.map(async (pond) => {
