@@ -1,6 +1,16 @@
 import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
 import { differenceInCalendarDays, startOfDay } from 'date-fns';
 
+/** Display YYYY-MM-DD as day month year (e.g. 19 July 2026). */
+export function formatDisplayDate(dateISO: string): string {
+  const [y, m, d] = dateISO.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
 /** Parse YYYY-MM-DD as UTC midnight so DB date comparisons stay consistent. */
 export function parseDateOnly(dateISO: string): Date {
   return new Date(`${dateISO}T00:00:00.000Z`);
@@ -18,11 +28,12 @@ export function formatFarmDate(date: Date, timezone: string): string {
 }
 
 export function calculateDoc(stockingDate: Date, feedingDate: Date): number {
-  const days = differenceInCalendarDays(
-    startOfDay(feedingDate),
-    startOfDay(stockingDate),
-  );
-  return days + 1;
+  const [sy, sm, sd] = stockingDate.toISOString().split('T')[0].split('-').map(Number);
+  const [fy, fm, fd] = feedingDate.toISOString().split('T')[0].split('-').map(Number);
+  const stockUtc = Date.UTC(sy, sm - 1, sd);
+  const feedUtc = Date.UTC(fy, fm - 1, fd);
+  const days = Math.floor((feedUtc - stockUtc) / 86_400_000);
+  return Math.max(days + 1, 1);
 }
 
 export function isDateEditableBySupervisor(

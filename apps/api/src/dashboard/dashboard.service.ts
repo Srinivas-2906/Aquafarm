@@ -11,12 +11,14 @@ export class DashboardService {
   ) {}
 
   async getOwnerDashboard(farmId: string, timezone: string) {
-    const [pondStatuses, farmTotal, totalFeedUsed, feedStockByCode] = await Promise.all([
-      this.feeding.getPondTodayStatuses(farmId, timezone),
-      this.inventory.getFarmTotal(farmId),
-      this.feeding.getFarmTotalFeedUsed(farmId),
-      this.inventory.getSummary(farmId),
-    ]);
+    const [pondStatuses, farmTotal, totalFeedUsed, feedStockByCode, feedUsedByCode] =
+      await Promise.all([
+        this.feeding.getPondTodayStatuses(farmId, timezone),
+        this.inventory.getFarmTotal(farmId),
+        this.feeding.getFarmTotalFeedUsed(farmId),
+        this.inventory.getSummary(farmId),
+        this.feeding.getFarmFeedUsedByCode(farmId),
+      ]);
 
     const totalFeedToday = sumDecimals(
       pondStatuses.map((p) => p.todayTotalFeedKg),
@@ -27,7 +29,9 @@ export class DashboardService {
       totalFeedTodayKg: totalFeedToday,
       totalFeedUsedKg: totalFeedUsed,
       currentFeedStockKg: farmTotal.totalStockKg,
+      currentFeedStockBags: farmTotal.numberOfBags,
       feedStockByCode,
+      feedUsedByCode,
       pendingApprovals: 0,
       unsyncedRecords: 0,
       lowStockProducts: 0,

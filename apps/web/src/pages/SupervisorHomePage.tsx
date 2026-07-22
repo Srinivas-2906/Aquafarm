@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { RefreshCw, Package, FileText } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { AddTankButton } from '@/components/AddTankButton';
-import { PondCard } from '@/components/PondCard';
+import { TankRowList, pondStatusesToTankRows } from '@/components/TankRowList';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
 import { syncPendingOperations, getPendingCount } from '@/lib/sync';
@@ -90,15 +90,17 @@ export function SupervisorHomePage() {
           <AddTankButton compact />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          {isLoading && <p className="text-text-secondary text-center py-8 col-span-2">{t('common.loading')}</p>}
+        <div className="flex flex-col gap-2">
+          {isLoading && <p className="text-text-secondary text-center py-8">{t('common.loading')}</p>}
           {!isLoading && pondStatuses?.length === 0 && (
-            <div className="card space-y-3 col-span-2">
+            <div className="card space-y-3">
               <p className="text-sm text-text-secondary">{t('tanks.noTanks')}</p>
               <AddTankButton />
             </div>
           )}
-          {pondStatuses?.map((pond) => <PondCard key={pond.pondId} pond={pond} />)}
+          {!isLoading && pondStatuses && pondStatuses.length > 0 && (
+            <TankRowList tanks={pondStatusesToTankRows(pondStatuses)} />
+          )}
         </div>
       </div>
     </AppShell>

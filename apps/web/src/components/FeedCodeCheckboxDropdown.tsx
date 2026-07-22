@@ -4,21 +4,17 @@ import type { FeedProductDto } from '@aqualedger/contracts';
 
 type FeedCodeCheckboxDropdownProps = {
   products: FeedProductDto[];
-  selectedCodeIds: string[];
   rowProductId: string;
   disabled?: boolean;
-  onToggleCode: (productId: string, assignRow?: boolean) => void;
-  onAssignRow: (productId: string) => void;
+  onSelectCode: (productId: string) => void;
   placeholder?: string;
 };
 
 export function FeedCodeCheckboxDropdown({
   products,
-  selectedCodeIds,
   rowProductId,
   disabled,
-  onToggleCode,
-  onAssignRow,
+  onSelectCode,
   placeholder = '—',
 }: FeedCodeCheckboxDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -36,22 +32,11 @@ export function FeedCodeCheckboxDropdown({
   }, [open]);
 
   const rowCode = products.find((fp) => fp.id === rowProductId)?.feedCode;
-  const selectedCodes = products
-    .filter((fp) => selectedCodeIds.includes(fp.id))
-    .map((fp) => fp.feedCode);
-  const displayCode =
-    rowCode || (selectedCodes.length > 0 ? selectedCodes.join(', ') : placeholder);
+  const displayCode = rowCode || placeholder;
 
-  const handleCheckboxChange = (productId: string, checked: boolean) => {
-    if (checked) {
-      if (selectedCodeIds.includes(productId)) {
-        onAssignRow(productId);
-      } else {
-        onToggleCode(productId, true);
-      }
-      return;
-    }
-    onToggleCode(productId, false);
+  const handleSelect = (productId: string) => {
+    onSelectCode(productId);
+    setOpen(false);
   };
 
   return (
@@ -76,23 +61,26 @@ export function FeedCodeCheckboxDropdown({
           className="absolute left-0 top-full z-30 mt-1 min-w-full w-max max-w-[min(180px,calc(100vw-2rem))] rounded-lg border border-border bg-surface shadow-lg py-1"
         >
           {products.map((fp) => {
-            const checked = selectedCodeIds.includes(fp.id);
-            const isRowCode = rowProductId === fp.id;
+            const selected = rowProductId === fp.id;
             return (
-              <label
+              <button
                 key={fp.id}
-                className={`flex items-center gap-2 px-2.5 py-1.5 text-sm cursor-pointer hover:bg-primary-light/40 ${
-                  isRowCode ? 'font-semibold text-primary bg-primary-light/20' : 'text-text'
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onClick={() => handleSelect(fp.id)}
+                className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-sm text-left hover:bg-primary-light/40 ${
+                  selected ? 'font-semibold text-primary bg-primary-light/20' : 'text-text'
                 }`}
               >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={(event) => handleCheckboxChange(fp.id, event.target.checked)}
-                  className="accent-primary shrink-0"
+                <span
+                  className={`h-3.5 w-3.5 shrink-0 rounded-full border ${
+                    selected ? 'border-primary bg-primary' : 'border-border bg-surface'
+                  }`}
+                  aria-hidden
                 />
                 <span>{fp.feedCode}</span>
-              </label>
+              </button>
             );
           })}
         </div>

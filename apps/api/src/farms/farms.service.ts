@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { farmSchema } from '@aqualedger/validation';
+import { farmSchema, farmUpdateSchema } from '@aqualedger/validation';
 import { isSelectableFarm } from '../common/constants/farm.constants';
 
 @Injectable()
@@ -85,5 +85,64 @@ export class FarmsService {
       timezone: farm.timezone,
       status: farm.status,
     };
+  }
+
+  async update(params: {
+    farmId: string;
+    organizationId: string;
+    input: Record<string, unknown>;
+  }) {
+    const parsed = farmUpdateSchema.safeParse(params.input);
+    if (!parsed.success) {
+      const message = parsed.error.errors.map((e) => e.message).join(', ');
+      throw new BadRequestException(message || 'Invalid farm');
+    }
+
+    const farm = await this.prisma.farm.findFirst({
+      where: { id: params.farmId, organizationId: params.organizationId },
+    });
+    if (!farm || !isSelectableFarm(farm)) {
+      throw new NotFoundException('Farm not found');
+    }
+
+    const updated = await this.prisma.farm.update({
+      where: { id: params.farmId },
+      data: {
+        ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+        ...(parsed.data.location !== undefined ? { location: parsed.data.location || null } : {}),
+        ...(parsed.data.timezone !== undefined ? { timezone: parsed.data.timezone } : {}),
+      },
+    });
+
+    return {
+      id: updated.id,
+      organizationId: updated.organizationId,
+      name: updated.name,
+      location: updated.location,
+      timezone: updated.timezone,
+      status: updated.status,
+    };
+  }
+
+  async archive(params: { farmId: string; organizationId: string }) {
+    const farm = await this.prisma.farm.findFirst({
+      where: { id: params.farmId, organizationId: params.organizationId },
+    });
+    if (!farm || !isSelectableFarm(farm)) {
+      throw new NotFoundException('Farm not found');
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.farm.update({
+        where: { id: params.farmId },
+        data: { status: 'INACTIVE' },
+      }),
+      this.prisma.farmUser.updateMany({
+        where: { farmId: params.farmId },
+        data: { status: 'INACTIVE' },
+      }),
+    ]);
+
+    return { id: farm.id, archived: true as const };
   }
 }

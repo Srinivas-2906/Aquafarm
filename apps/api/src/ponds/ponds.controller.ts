@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { UserRole } from '@prisma/client';
 import { PondsService } from './ponds.service';
-import { FarmAccessGuard, JwtAuthGuard } from '../common/guards/auth.guards';
-import { CurrentUser, RequireFarmAccess } from '../common/decorators/auth.decorators';
+import { FarmAccessGuard, JwtAuthGuard, RolesGuard } from '../common/guards/auth.guards';
+import { CurrentUser, RequireFarmAccess, Roles } from '../common/decorators/auth.decorators';
 
 @ApiTags('ponds')
 @Controller()
@@ -40,6 +41,18 @@ export class PondsController {
     return this.ponds.update({ farmId, pondId, organizationId, input: body });
   }
 
+  @Delete('farms/:farmId/ponds/:pondId')
+  @UseGuards(FarmAccessGuard, RolesGuard)
+  @RequireFarmAccess()
+  @Roles(UserRole.OWNER)
+  async archive(
+    @Param('farmId') farmId: string,
+    @Param('pondId') pondId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.ponds.archive({ farmId, pondId, organizationId });
+  }
+
   @Get('ponds/:pondId')
   async findOne(@Param('pondId') pondId: string) {
     return this.ponds.findOne(pondId);
@@ -54,8 +67,9 @@ export class PondsController {
   @Post('ponds/:pondId/culture-cycle')
   async ensureActiveCycle(
     @Param('pondId') pondId: string,
+    @Body() body: Record<string, unknown>,
     @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.ponds.ensureActiveCycle(pondId, organizationId);
+    return this.ponds.ensureActiveCycle(pondId, organizationId, body);
   }
 }

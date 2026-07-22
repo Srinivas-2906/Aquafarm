@@ -71,6 +71,19 @@ export const feedingMealUpdateSchema = z
     message: 'No changes provided',
   });
 
+export const feedingMealsSyncSchema = z.object({
+  meals: z
+    .array(
+      z.object({
+        id: z.string().uuid().optional(),
+        feedQuantityKg: decimalKg,
+        feedProductId: z.string().uuid(),
+        actualTime: z.string().regex(/^\d{2}:\d{2}$/, 'Enter a valid time').optional(),
+      }),
+    )
+    .max(10),
+});
+
 const entityId = z.string().min(1).max(100);
 
 export const feedingEntrySchema = z.object({
@@ -161,6 +174,11 @@ export const farmSchema = z.object({
   location: z.string().max(200).optional(),
   timezone: z.string().max(50).optional(),
 });
+
+export const farmUpdateSchema = farmSchema.partial().refine(
+  (data) => Object.keys(data).length > 0,
+  { message: 'At least one field is required' },
+);
 
 export const cultureCycleSchema = z.object({
   pondId: z.string().uuid(),

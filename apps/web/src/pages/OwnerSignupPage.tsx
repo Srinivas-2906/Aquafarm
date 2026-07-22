@@ -10,7 +10,7 @@ export function OwnerSignupPage() {
   const [ownerName, setOwnerName] = useState('');
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
-  const [signupCode, setSignupCode] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -21,6 +21,12 @@ export function OwnerSignupPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (pin !== confirmPin) {
+      setError('PIN and confirm PIN do not match');
+      return;
+    }
+
     setLoading(true);
     try {
       await signupOwner({
@@ -28,7 +34,7 @@ export function OwnerSignupPage() {
         ownerName,
         phoneNumber: phone,
         pin,
-        signupCode,
+        confirmPin,
       });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Signup failed');
@@ -45,7 +51,7 @@ export function OwnerSignupPage() {
             <span className="text-white text-3xl font-bold">V</span>
           </div>
           <h1 className="text-2xl font-bold text-primary">{PRODUCT.name}</h1>
-          <p className="text-text-secondary mt-1">Owner signup</p>
+          <p className="text-text-secondary mt-1">Create owner account</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -62,7 +68,7 @@ export function OwnerSignupPage() {
           </div>
 
           <div>
-            <label className="label" htmlFor="ownerName">Owner name</label>
+            <label className="label" htmlFor="ownerName">Your name</label>
             <input
               id="ownerName"
               value={ownerName}
@@ -89,7 +95,7 @@ export function OwnerSignupPage() {
           </div>
 
           <div>
-            <label className="label" htmlFor="pin">PIN</label>
+            <label className="label" htmlFor="pin">PIN (6 digits)</label>
             <input
               id="pin"
               type="password"
@@ -104,13 +110,16 @@ export function OwnerSignupPage() {
           </div>
 
           <div>
-            <label className="label" htmlFor="signupCode">Signup code</label>
+            <label className="label" htmlFor="confirmPin">Confirm PIN</label>
             <input
-              id="signupCode"
-              value={signupCode}
-              onChange={(e) => setSignupCode(e.target.value)}
+              id="confirmPin"
+              type="password"
+              inputMode="numeric"
+              maxLength={6}
+              value={confirmPin}
+              onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
               className="input-field"
-              placeholder="(provided by admin)"
+              placeholder="••••••"
               required
             />
           </div>
@@ -122,7 +131,7 @@ export function OwnerSignupPage() {
           )}
 
           <button type="submit" className="btn-primary" disabled={loading}>
-            {loading ? 'Creating account...' : 'Create owner account'}
+            {loading ? 'Creating account...' : 'Create account'}
           </button>
         </form>
 
@@ -133,4 +142,3 @@ export function OwnerSignupPage() {
     </div>
   );
 }
-

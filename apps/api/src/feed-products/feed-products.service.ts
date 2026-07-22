@@ -164,7 +164,7 @@ export class FeedProductsService {
   private readonly defaultFeedProducts = [
     { feedCode: '1C', brandName: 'Feed 1C', pelletSize: '1.2mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
     { feedCode: '2C', brandName: 'Feed 2C', pelletSize: '1.5mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
-    { feedCode: '20', brandName: 'Feed 20', pelletSize: '2.0mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
+    { feedCode: '2P', brandName: 'Feed 2P', pelletSize: '2.0mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
     { feedCode: '3S', brandName: 'Feed 3S', pelletSize: '2.0mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
     { feedCode: '3SP', brandName: 'Feed 3SP', pelletSize: '2.0mm', bagWeightKg: '25', lowStockThresholdKg: '100' },
     { feedCode: '3P', brandName: 'Feed 3P', pelletSize: '2.0mm', bagWeightKg: '25', lowStockThresholdKg: '200' },

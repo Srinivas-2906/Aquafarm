@@ -15,6 +15,7 @@ import {
   from24HourTime,
   getTodayISO,
   getYesterdayISO,
+  groupMealsByFeedSlot,
   sumKg,
 } from '@/lib/utils';
 
@@ -85,28 +86,32 @@ function entriesToDateGroups(entries: FeedingEntryDto[], feedProductIds: string[
           return feedProductIds.includes(mealProductId);
         });
       const totalKg = meals.reduce((sum, meal) => sum + (parseFloat(meal.feedQuantityKg) || 0), 0);
+      const feedSlots = groupMealsByFeedSlot(meals);
       return {
         date: entryDateISO(entry),
         doc: entry.doc,
         totalKg: totalKg.toFixed(3),
-        feeds: meals.map((meal) => ({
-          key: meal.id,
-          label: `Feed ${meal.mealNumber}`,
-          feedCode: meal.feedCode || entry.feedCode || '—',
-          quantity: formatQty(meal.feedQuantityKg),
-          time: formatMealTime(meal.actualTime),
-        })),
+        feeds: feedSlots.flatMap((slotMeals, slotIndex) =>
+          slotMeals.map((meal) => ({
+            key: meal.id,
+            label: `Feed ${slotIndex + 1}`,
+            feedCode: meal.feedCode || entry.feedCode || '—',
+            quantity: formatQty(meal.feedQuantityKg),
+            time: formatMealTime(meal.actualTime),
+          })),
+        ),
       };
     })
     .filter((group) => group.feeds.length > 0);
 }
 
 function dateHeading(dateISO: string, t: (key: string) => string): string {
+  const formatted = formatDate(dateISO);
   const today = getTodayISO();
   const yesterday = getYesterdayISO();
-  if (dateISO === today) return t('records.today');
-  if (dateISO === yesterday) return t('records.yesterday');
-  return formatDate(dateISO);
+  if (dateISO === today) return `${t('records.today')} · ${formatted}`;
+  if (dateISO === yesterday) return `${t('records.yesterday')} · ${formatted}`;
+  return formatted;
 }
 
 async function fetchFeedEntries(
@@ -285,7 +290,7 @@ export function ReportsPage() {
 
   const share = async () => {
     if (!report) return;
-    const text = `Feeding Report\nPeriod: ${dateFrom} to ${dateTo}\nTotal: ${report.summary.periodTotalKg} kg\nEntries: ${report.summary.totalEntries}`;
+    const text = `Feeding Report\nPeriod: ${formatDate(dateFrom)} to ${formatDate(dateTo)}\nTotal: ${report.summary.periodTotalKg} kg\nEntries: ${report.summary.totalEntries}`;
     if (navigator.share) {
       await navigator.share({ title: 'Feeding Report', text });
     } else {
@@ -469,9 +474,7 @@ export function ReportsPage() {
                     <div className="flex items-center justify-between gap-2">
                       <div>
                         <p className="text-sm font-bold text-primary">{dateHeading(group.date, t)}</p>
-                        <p className="text-xs text-text-secondary">
-                          {formatDate(group.date)} · DOC {group.doc}
-                        </p>
+                        <p className="text-xs text-text-secondary">DOC {group.doc}</p>
                       </div>
                       <p className="text-sm font-bold shrink-0">{formatQty(group.totalKg)}</p>
                     </div>
@@ -529,17 +532,13 @@ export function ReportsPage() {
                       <th className="p-2">M3</th>
                       <th className="p-2">M4</th>
                       <th className="p-2">M5</th>
-                      <th className="p-2">TDF</th>
-                      <th className="p-2">Cum.</th>
-                      <th className="p-2">Tray</th>
-                      <th className="p-2 text-left">Remarks</th>
                       {!singleTankReport && <th className="p-2">Tank</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {(showAllRows ? report.rows : report.rows.slice(0, 50)).map((row, i) => (
                       <tr key={i} className="border-t border-border">
-                        <td className="p-2 whitespace-nowrap">{row.date}</td>
+                        <td className="p-2 whitespace-nowrap">{formatDate(row.date)}</td>
                         <td className="p-2 text-center">{row.doc}</td>
                         <td className="p-2 text-center">{row.feedCode}</td>
                         <td className="p-2 text-center">{row.meal1}</td>
@@ -547,10 +546,6 @@ export function ReportsPage() {
                         <td className="p-2 text-center">{row.meal3}</td>
                         <td className="p-2 text-center">{row.meal4}</td>
                         <td className="p-2 text-center">{row.meal5}</td>
-                        <td className="p-2 text-center font-medium">{row.tdf}</td>
-                        <td className="p-2 text-center">{row.cumulative}</td>
-                        <td className="p-2 text-center">{row.checkTray}</td>
-                        <td className="p-2">{row.remarks}</td>
                         {!singleTankReport && <td className="p-2">{row.pondName}</td>}
                       </tr>
                     ))}

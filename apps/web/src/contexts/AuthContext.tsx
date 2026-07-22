@@ -7,14 +7,14 @@ interface AuthContextType {
   user: AuthUser | null;
   isLoading: boolean;
   selectedFarmId: string | null;
-  setSelectedFarmId: (id: string) => void;
+  setSelectedFarmId: (id: string | null) => void;
   login: (phone: string, pin: string) => Promise<void>;
   signupOwner: (input: {
     organizationName: string;
     ownerName: string;
     phoneNumber: string;
     pin: string;
-    signupCode: string;
+    confirmPin: string;
   }) => Promise<void>;
   refreshMe: () => Promise<void>;
   logout: () => Promise<void>;
@@ -28,6 +28,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [selectedFarmId, setSelectedFarmId] = useState<string | null>(
     localStorage.getItem('selectedFarmId'),
   );
+
+  useEffect(() => {
+    const onSessionExpired = () => {
+      setUser(null);
+      setSelectedFarmId(null);
+      localStorage.removeItem('selectedFarmId');
+    };
+    window.addEventListener('auth:session-expired', onSessionExpired);
+    return () => window.removeEventListener('auth:session-expired', onSessionExpired);
+  }, []);
 
   useEffect(() => {
     const token = localStorage.getItem('accessToken');
@@ -77,7 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ownerName: string;
     phoneNumber: string;
     pin: string;
-    signupCode: string;
+    confirmPin: string;
   }) => {
     const result = await authApi.signupOwner(input);
     localStorage.setItem('accessToken', result.accessToken);
@@ -107,9 +117,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSelectedFarmId(null);
   }, []);
 
-  const handleSetFarm = useCallback((id: string) => {
+  const handleSetFarm = useCallback((id: string | null) => {
     setSelectedFarmId(id);
-    localStorage.setItem('selectedFarmId', id);
+    if (id) localStorage.setItem('selectedFarmId', id);
+    else localStorage.removeItem('selectedFarmId');
   }, []);
 
   return (

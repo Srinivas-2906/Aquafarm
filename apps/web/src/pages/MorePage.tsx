@@ -1,10 +1,11 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { LogOut, CheckCircle, History, Settings, FileText, UserPlus } from 'lucide-react';
+import { LogOut, CheckCircle, History, Settings, FileText, UserPlus, Package } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/contexts/AuthContext';
-import { api } from '@/lib/api';
+import { api, authApi, ApiError } from '@/lib/api';
 import { UserRole } from '@/types/roles';
 
 export function MorePage() {
@@ -16,6 +17,7 @@ export function MorePage() {
   const items = [
     // Always available
     { to: '/records', icon: FileText, label: t('nav.records') },
+    { to: '/inventory/reports', icon: Package, label: t('nav.inventoryReport') },
     // Owner-only items (routes + APIs are still owner-only)
     ...(isOwner
       ? [
@@ -115,17 +117,81 @@ export function SettingsPage() {
 
 export function ResetPinPage() {
   const { t } = useTranslation();
+  const [phone, setPhone] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+    setLoading(true);
+    try {
+      const result = await authApi.requestPinReset(phone, message || undefined);
+      setSuccess(result.message);
+      setPhone('');
+      setMessage('');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not submit request');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-dvh px-6 py-8 max-w-md mx-auto">
-      <h1 className="text-xl font-bold mb-6">{t('login.forgotPin')}</h1>
-      <div className="card text-sm text-text-secondary">
-        {t(
-          'login.forgotPinNoOtp',
-          'Forgot PIN? OTP reset is disabled. Please contact your owner to reset your PIN.',
+      <h1 className="text-xl font-bold mb-2">{t('login.forgotPin', 'Forgot PIN?')}</h1>
+      <p className="text-sm text-text-secondary mb-6">
+        Submit a request and admin will reset your PIN.
+      </p>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="label" htmlFor="resetPhone">{t('login.phone')}</label>
+          <input
+            id="resetPhone"
+            type="tel"
+            inputMode="numeric"
+            maxLength={10}
+            value={phone}
+            onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+            className="input-field"
+            placeholder="9985533376"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="label" htmlFor="resetMessage">Note (optional)</label>
+          <textarea
+            id="resetMessage"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            className="input-field min-h-[80px]"
+            placeholder="e.g. forgot PIN after phone change"
+            maxLength={500}
+          />
+        </div>
+
+        {error && (
+          <p className="text-danger text-sm bg-danger/10 p-3 rounded-lg" role="alert">
+            {error}
+          </p>
         )}
-      </div>
-      <a href="/login" className="block mt-4 text-primary text-sm">Back to login</a>
+        {success && (
+          <p className="text-success text-sm bg-success/10 p-3 rounded-lg" role="status">
+            {success}
+          </p>
+        )}
+
+        <button type="submit" className="btn-primary w-full" disabled={loading}>
+          {loading ? t('common.loading') : 'Submit request'}
+        </button>
+      </form>
+
+      <Link to="/login" className="block mt-4 text-primary text-sm">Back to login</Link>
     </div>
   );
 }

@@ -195,12 +195,28 @@ export interface PondTodayStatusDto {
   hasEntryToday: boolean;
 }
 
+export interface FeedUsedByPondDto {
+  pondId: string;
+  pondName: string;
+  pondCode: string;
+  feedUsedKg: string;
+}
+
+export interface FeedUsedByCodeDto {
+  feedProductId: string;
+  feedCode: string;
+  totalUsedKg: string;
+  byPond: FeedUsedByPondDto[];
+}
+
 export interface DashboardSummaryDto {
   activePonds: number;
   totalFeedTodayKg: string;
   totalFeedUsedKg: string;
   currentFeedStockKg: string;
+  currentFeedStockBags: number;
   feedStockByCode: InventorySummaryDto[];
+  feedUsedByCode: FeedUsedByCodeDto[];
   pendingApprovals: number;
   unsyncedRecords: number;
   lowStockProducts: number;

@@ -11,6 +11,7 @@ import { ReceiveFeedPage, DamageFeedPage, FeedProductFormPage } from '@/pages/In
 import { OwnerDashboardPage } from '@/pages/OwnerDashboardPage';
 import { ApprovalsPage } from '@/pages/ApprovalsPage';
 import { ReportsPage } from '@/pages/ReportsPage';
+import { InventoryReportsPage } from '@/pages/InventoryReportsPage';
 import { InviteSupervisorPage } from '@/pages/InviteSupervisorPage';
 import { MorePage, AuditPage, SettingsPage, ResetPinPage } from '@/pages/MorePage';
 import { NetPage } from '@/pages/NetPage';
@@ -86,6 +87,7 @@ export function App() {
             <Route path="/inventory/damage" element={<ProtectedRoute><DamageFeedPage /></ProtectedRoute>} />
             <Route path="/inventory/feeds/new" element={<ProtectedRoute ownerOnly><FeedProductFormPage /></ProtectedRoute>} />
             <Route path="/inventory/feeds/:feedProductId/edit" element={<ProtectedRoute ownerOnly><FeedProductFormPage /></ProtectedRoute>} />
+            <Route path="/inventory/reports" element={<ProtectedRoute><InventoryReportsPage /></ProtectedRoute>} />
             <Route path="/approvals" element={<ProtectedRoute ownerOnly><ApprovalsPage /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute ownerOnly><ReportsPage /></ProtectedRoute>} />
             <Route path="/net" element={<ProtectedRoute><NetPage /></ProtectedRoute>} />

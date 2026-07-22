@@ -9,6 +9,42 @@ export class ApiError extends Error {
   }
 }
 
+function shouldAttemptRefresh(path: string): boolean {
+  return !path.startsWith('/auth/login') && !path.startsWith('/auth/refresh') && !path.startsWith('/auth/signup-owner');
+}
+
+let refreshPromise: Promise<string | null> | null = null;
+
+export async function refreshAccessToken(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) return null;
+      const data = (await response.json()) as { accessToken?: string };
+      if (!data.accessToken) return null;
+      localStorage.setItem('accessToken', data.accessToken);
+      return data.accessToken;
+    } catch {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
+function clearAuthSession(): void {
+  localStorage.removeItem('accessToken');
+  window.dispatchEvent(new Event('auth:session-expired'));
+}
+
 function parseFilenameFromContentDisposition(headerValue: string | null): string | undefined {
   if (!headerValue) return undefined;
   const match = /filename="([^"]+)"/i.exec(headerValue);
@@ -18,6 +54,7 @@ function parseFilenameFromContentDisposition(headerValue: string | null): string
 async function requestResponse(
   path: string,
   options: RequestInit = {},
+  retried = false,
 ): Promise<Response> {
   const token = localStorage.getItem('accessToken');
   const headers: Record<string, string> = { ...(options.headers as Record<string, string>) };
@@ -33,6 +70,14 @@ async function requestResponse(
     });
   } catch {
     throw new ApiError(0, 'No internet connection');
+  }
+
+  if (response.status === 401 && !retried && shouldAttemptRefresh(path)) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      return requestResponse(path, options, true);
+    }
+    clearAuthSession();
   }
 
   if (!response.ok) {
@@ -76,6 +121,9 @@ export const api = {
     requestJson<T>(path, { method: 'POST', body: JSON.stringify(body) }),
   patch: <T>(path: string, body?: unknown) =>
     requestJson<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  put: <T>(path: string, body?: unknown) =>
+    requestJson<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
+  delete: <T>(path: string) => requestJson<T>(path, { method: 'DELETE' }),
   file: (path: string) => requestFile(path),
 };
 
@@ -90,12 +138,14 @@ export const authApi = {
     ownerName: string;
     phoneNumber: string;
     pin: string;
-    signupCode: string;
+    confirmPin: string;
   }) =>
     api.post<{ user: import('@aqualedger/contracts').AuthUser; accessToken: string }>(
       '/auth/signup-owner',
       input,
     ),
+  requestPinReset: (phoneNumber: string, message?: string) =>
+    api.post<{ message: string }>('/auth/pin-reset-request', { phoneNumber, message }),
   me: () => api.get<import('@aqualedger/contracts').AuthUser>('/auth/me'),
   logout: () => api.post('/auth/logout'),
   requestOtp: (phoneNumber: string) => api.post('/auth/request-otp', { phoneNumber }),

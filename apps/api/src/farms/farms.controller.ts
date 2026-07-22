@@ -1,8 +1,8 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { FarmsService } from './farms.service';
-import { FarmAccessGuard, JwtAuthGuard } from '../common/guards/auth.guards';
-import { CurrentUser, RequireFarmAccess } from '../common/decorators/auth.decorators';
+import { FarmAccessGuard, JwtAuthGuard, RolesGuard } from '../common/guards/auth.guards';
+import { CurrentUser, RequireFarmAccess, Roles } from '../common/decorators/auth.decorators';
 import { UserRole } from '@prisma/client';
 
 @ApiTags('farms')
@@ -40,5 +40,28 @@ export class FarmsController {
       organizationId,
       userRole: role,
     });
+  }
+
+  @Patch(':farmId')
+  @UseGuards(RolesGuard)
+  @RequireFarmAccess()
+  @Roles(UserRole.OWNER)
+  async update(
+    @Param('farmId') farmId: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.farms.update({ farmId, organizationId, input: body });
+  }
+
+  @Delete(':farmId')
+  @UseGuards(RolesGuard)
+  @RequireFarmAccess()
+  @Roles(UserRole.OWNER)
+  async archive(
+    @Param('farmId') farmId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.farms.archive({ farmId, organizationId });
   }
 }
