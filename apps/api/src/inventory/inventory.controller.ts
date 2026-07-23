@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Query, Param, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { InventoryService } from './inventory.service';
 import { FarmAccessGuard, JwtAuthGuard } from '../common/guards/auth.guards';
@@ -37,6 +37,16 @@ export class InventoryController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     return this.inventory.addFarmStockEntry(body, userId, organizationId);
+  }
+
+  @Patch('entries/:id')
+  async updateEntry(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.inventory.updateFarmStockEntry(id, body, userId, organizationId);
   }
 
   @Patch('total')

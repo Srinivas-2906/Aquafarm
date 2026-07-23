@@ -145,6 +145,12 @@ export const addFarmStockEntrySchema = z.object({
   numberOfBags: z.number().int().min(1, 'Enter number of bags'),
 });
 
+export const updateFarmStockEntrySchema = z.object({
+  feedProductId: z.string().uuid('Select a feed code'),
+  transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a valid date'),
+  numberOfBags: z.number().int().min(1, 'Enter number of bags'),
+});
+
 export const setProductInventorySchema = z
   .object({
     farmId: entityId,
@@ -238,4 +244,5 @@ export type FeedingEntryInput = z.infer<typeof feedingEntrySchema>;
 export type InventoryTransactionInput = z.infer<typeof inventoryTransactionSchema>;
 export type SetFarmInventoryTotalInput = z.infer<typeof setFarmInventoryTotalSchema>;
 export type AddFarmStockEntryInput = z.infer<typeof addFarmStockEntrySchema>;
+export type UpdateFarmStockEntryInput = z.infer<typeof updateFarmStockEntrySchema>;
 export type SyncBatchInput = z.infer<typeof syncBatchSchema>;

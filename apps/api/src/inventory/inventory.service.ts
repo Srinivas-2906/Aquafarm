@@ -1,9 +1,10 @@
 import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import { InventoryTransaction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FeedProductsService } from '../feed-products/feed-products.service';
 import { getTransactionDirection, decimalToString, sumDecimals, parseDateOnly, getFarmToday } from '../common/utils/date.utils';
-import { inventoryTransactionSchema, setFarmInventoryTotalSchema, setProductInventorySchema } from '@aqualedger/validation';
+import { inventoryTransactionSchema, setFarmInventoryTotalSchema, setProductInventorySchema, addFarmStockEntrySchema, updateFarmStockEntrySchema } from '@aqualedger/validation';
 import { v4 as uuidv4 } from 'uuid';
 import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
 
@@ -182,30 +183,13 @@ export class InventoryService {
     userId: string,
     organizationId: string,
   ) {
-    const farmId = typeof input.farmId === 'string' ? input.farmId.trim() : '';
-    const feedProductId =
-      typeof input.feedProductId === 'string' ? input.feedProductId.trim() : '';
-    const transactionDate =
-      typeof input.transactionDate === 'string' ? input.transactionDate.trim() : '';
-    const numberOfBags =
-      typeof input.numberOfBags === 'number'
-        ? input.numberOfBags
-        : typeof input.numberOfBags === 'string'
-          ? parseInt(input.numberOfBags, 10)
-          : NaN;
+    const parsed = addFarmStockEntrySchema.safeParse(input);
+    if (!parsed.success) {
+      const message = parsed.error.errors.map((e) => e.message).join(', ');
+      throw new BadRequestException(message || 'Invalid stock entry');
+    }
 
-    if (!farmId) {
-      throw new BadRequestException('Farm is required');
-    }
-    if (!feedProductId) {
-      throw new BadRequestException('Select a feed code');
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(transactionDate)) {
-      throw new BadRequestException('Pick a valid date');
-    }
-    if (!Number.isInteger(numberOfBags) || numberOfBags < 1) {
-      throw new BadRequestException('Enter number of bags');
-    }
+    const { farmId, feedProductId, transactionDate, numberOfBags } = parsed.data;
 
     const farm = await this.prisma.farm.findFirst({
       where: { id: farmId, organizationId, status: 'ACTIVE' },
@@ -236,6 +220,99 @@ export class InventoryService {
         transactionDate,
         numberOfBags,
         remarks: 'Farm stock entry',
+      },
+      userId,
+      organizationId,
+    );
+
+    return {
+      id: tx.id,
+      transactionDate: tx.transactionDate,
+      feedProductId: product.id,
+      feedCode: product.feedCode,
+      numberOfBags,
+      quantityKg: tx.quantityKg,
+    };
+  }
+
+  async updateFarmStockEntry(
+    entryId: string,
+    input: Record<string, unknown>,
+    userId: string,
+    organizationId: string,
+  ) {
+    const parsed = updateFarmStockEntrySchema.safeParse(input);
+    if (!parsed.success) {
+      const message = parsed.error.errors.map((e) => e.message).join(', ');
+      throw new BadRequestException(message || 'Invalid stock entry');
+    }
+
+    const original = await this.prisma.inventoryTransaction.findFirst({
+      where: { id: entryId, organizationId, status: 'CONFIRMED' },
+      include: { feedProduct: true },
+    });
+    if (!original) {
+      throw new NotFoundException('Stock entry not found');
+    }
+    if (!original.numberOfBags) {
+      throw new BadRequestException('This stock entry cannot be edited');
+    }
+    if (original.feedingEntryId) {
+      throw new BadRequestException('This stock entry cannot be edited');
+    }
+    if (!['FEED_RECEIVED', 'MANUAL_ADJUSTMENT_IN'].includes(original.type)) {
+      throw new BadRequestException('This stock entry cannot be edited');
+    }
+
+    const { feedProductId, transactionDate, numberOfBags } = parsed.data;
+    const originalDate = original.transactionDate.toISOString().split('T')[0];
+    const unchanged =
+      original.feedProductId === feedProductId &&
+      original.numberOfBags === numberOfBags &&
+      originalDate === transactionDate;
+
+    if (unchanged) {
+      return {
+        id: original.id,
+        transactionDate: originalDate,
+        feedProductId: original.feedProductId,
+        feedCode: original.feedProduct?.feedCode ?? '',
+        numberOfBags: original.numberOfBags,
+        quantityKg: decimalToString(original.quantityKg),
+      };
+    }
+
+    const product = await this.prisma.feedProduct.findFirst({
+      where: {
+        id: feedProductId,
+        farmId: original.farmId,
+        organizationId,
+        status: 'ACTIVE',
+      },
+    });
+    if (!product) {
+      throw new BadRequestException('Select a feed code');
+    }
+
+    await this.reverseStockEntry(original, userId, 'Stock entry edited');
+
+    const bagWeight = parseFloat(product.bagWeightKg.toString()) || 25;
+    const quantityKg = (numberOfBags * bagWeight).toFixed(3);
+    const remarks =
+      original.type === 'MANUAL_ADJUSTMENT_IN'
+        ? original.remarks ?? 'Manual stock adjustment'
+        : 'Farm stock entry';
+
+    const tx = await this.createTransaction(
+      {
+        clientTransactionId: uuidv4(),
+        farmId: original.farmId,
+        feedProductId: product.id,
+        type: original.type,
+        quantityKg,
+        transactionDate,
+        numberOfBags,
+        remarks,
       },
       userId,
       organizationId,
@@ -485,40 +562,64 @@ export class InventoryService {
     if (!originals.length) return;
 
     for (const original of originals) {
-      const reversal = await this.prisma.inventoryTransaction.create({
-        data: {
-          clientTransactionId: uuidv4(),
-          organizationId: original.organizationId,
-          farmId: original.farmId,
-          feedProductId: original.feedProductId,
-          pondId: original.pondId,
-          feedingEntryId,
-          type: 'REVERSAL',
-          direction: 'IN',
-          quantityKg: original.quantityKg,
-          transactionDate: original.transactionDate,
-          remarks: `Reversal: ${reason}`,
-          createdByUserId: userId,
-          status: 'CONFIRMED',
-          reversedTransactionId: original.id,
-        },
-      });
+      await this.reverseStockEntry(original, userId, reason, { feedingEntryId });
+    }
+  }
 
-      await this.prisma.inventoryTransaction.update({
-        where: { id: original.id },
-        data: { status: 'REVERSED' },
-      });
-
-      await this.audit.log({
+  private async reverseStockEntry(
+    original: Pick<
+      InventoryTransaction,
+      | 'id'
+      | 'organizationId'
+      | 'farmId'
+      | 'feedProductId'
+      | 'direction'
+      | 'quantityKg'
+      | 'transactionDate'
+      | 'numberOfBags'
+      | 'pondId'
+    >,
+    userId: string,
+    reason: string,
+    extra?: { feedingEntryId?: string },
+  ) {
+    const reversalDirection = original.direction === 'IN' ? 'OUT' : 'IN';
+    const reversal = await this.prisma.inventoryTransaction.create({
+      data: {
+        clientTransactionId: uuidv4(),
         organizationId: original.organizationId,
         farmId: original.farmId,
-        userId,
-        entityType: 'INVENTORY_TRANSACTION',
-        entityId: reversal.id,
-        action: 'REVERSE',
-        reason,
-      });
-    }
+        feedProductId: original.feedProductId,
+        pondId: original.pondId ?? undefined,
+        feedingEntryId: extra?.feedingEntryId,
+        type: 'REVERSAL',
+        direction: reversalDirection,
+        quantityKg: original.quantityKg,
+        transactionDate: original.transactionDate,
+        remarks: `Reversal: ${reason}`,
+        numberOfBags: original.numberOfBags,
+        createdByUserId: userId,
+        status: 'CONFIRMED',
+        reversedTransactionId: original.id,
+      },
+    });
+
+    await this.prisma.inventoryTransaction.update({
+      where: { id: original.id },
+      data: { status: 'REVERSED' },
+    });
+
+    await this.audit.log({
+      organizationId: original.organizationId,
+      farmId: original.farmId,
+      userId,
+      entityType: 'INVENTORY_TRANSACTION',
+      entityId: reversal.id,
+      action: 'REVERSE',
+      reason,
+    });
+
+    return reversal;
   }
 
   async findTransactions(farmId: string, page = 1, pageSize = 50) {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Pencil } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, ApiError } from '@/lib/api';
@@ -45,7 +46,8 @@ export function InventoryPage() {
   const [feedProductId, setFeedProductId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<'created' | 'updated' | null>(null);
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
 
   const todayISO = getTodayISO();
 
@@ -71,8 +73,27 @@ export function InventoryPage() {
     setDraftBags('');
     setDraftDate(getTodayISO());
     setFeedProductId('');
-    setSaved(false);
+    setSaveNotice(null);
+    setEditingEntryId(null);
   }, [selectedFarmId]);
+
+  const resetForm = () => {
+    setError(null);
+    setDraftBags('');
+    setDraftDate(getTodayISO());
+    setFeedProductId(sortedProducts[0]?.id ?? '');
+    setSaveNotice(null);
+    setEditingEntryId(null);
+  };
+
+  const startEdit = (entry: FarmStockEntriesDto['entries'][number]) => {
+    setEditingEntryId(entry.id);
+    setDraftDate(entry.transactionDate);
+    setFeedProductId(entry.feedProductId);
+    setDraftBags(String(entry.numberOfBags));
+    setError(null);
+    setSaveNotice(null);
+  };
 
   useEffect(() => {
     if (!sortedProducts.length) return;
@@ -106,17 +127,26 @@ export function InventoryPage() {
     }
 
     setSaving(true);
-    setSaved(false);
+    setSaveNotice(null);
+    const wasEditing = !!editingEntryId;
 
     try {
-      await api.post('/inventory/entries', {
-        farmId: selectedFarmId,
-        feedProductId,
-        numberOfBags,
-        transactionDate: draftDate,
-      });
-      setDraftBags('');
-      setSaved(true);
+      if (editingEntryId) {
+        await api.patch(`/inventory/entries/${editingEntryId}`, {
+          feedProductId,
+          numberOfBags,
+          transactionDate: draftDate,
+        });
+      } else {
+        await api.post('/inventory/entries', {
+          farmId: selectedFarmId,
+          feedProductId,
+          numberOfBags,
+          transactionDate: draftDate,
+        });
+      }
+      resetForm();
+      setSaveNotice(wasEditing ? 'updated' : 'created');
       await queryClient.invalidateQueries({ queryKey: ['inventory-entries', selectedFarmId] });
       await queryClient.invalidateQueries({ queryKey: ['dashboard', selectedFarmId] });
     } catch (err) {
@@ -145,7 +175,10 @@ export function InventoryPage() {
 
         {!isLoading && (
           <>
-            <div className="card bg-primary-light space-y-3">
+            <div className={`card space-y-3 ${editingEntryId ? 'ring-2 ring-primary/30' : 'bg-primary-light'}`}>
+              {editingEntryId && (
+                <p className="text-sm font-medium text-primary">{t('inventory.editingRecord')}</p>
+              )}
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm text-text-secondary">{t('inventory.farmStock')}</span>
                 <span className="text-xl font-bold text-primary tabular-nums">
@@ -166,7 +199,7 @@ export function InventoryPage() {
                     onChange={(e) => {
                       setDraftDate(e.target.value);
                       setError(null);
-                      setSaved(false);
+                      setSaveNotice(null);
                     }}
                     className="input-compact !min-h-0 !py-2 !px-1 !text-xs font-semibold w-full min-w-0 max-w-full box-border"
                   />
@@ -182,7 +215,7 @@ export function InventoryPage() {
                     onChange={(e) => {
                       setFeedProductId(e.target.value);
                       setError(null);
-                      setSaved(false);
+                      setSaveNotice(null);
                     }}
                     className="input-compact !min-h-0 !py-2 !text-sm font-bold w-full min-w-0"
                     disabled={!sortedProducts.length}
@@ -210,7 +243,7 @@ export function InventoryPage() {
                       if (!isDraftBags(v)) return;
                       setDraftBags(v);
                       setError(null);
-                      setSaved(false);
+                      setSaveNotice(null);
                     }}
                     className="input-field !py-2 !text-lg font-bold w-full min-w-0"
                     placeholder="0"
@@ -227,18 +260,36 @@ export function InventoryPage() {
                 <p className="text-danger text-sm">{t('inventory.loadError')}</p>
               )}
 
-              {saved && !error && (
-                <p className="text-success text-sm font-medium">{t('inventory.saved')}</p>
+              {saveNotice && !error && (
+                <p className="text-success text-sm font-medium">
+                  {saveNotice === 'updated' ? t('inventory.updated') : t('inventory.saved')}
+                </p>
               )}
 
-              <button
-                type="button"
-                onClick={() => void handleSave()}
-                disabled={saving || !selectedFarmId || !sortedProducts.length}
-                className="btn-primary w-full !py-2.5 !text-sm"
-              >
-                {saving ? t('common.loading') : t('inventory.saveStock')}
-              </button>
+              <div className="flex gap-2">
+                {editingEntryId && (
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    disabled={saving}
+                    className="btn-secondary flex-1 !py-2.5 !text-sm"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleSave()}
+                  disabled={saving || !selectedFarmId || !sortedProducts.length}
+                  className={`btn-primary !py-2.5 !text-sm ${editingEntryId ? 'flex-1' : 'w-full'}`}
+                >
+                  {saving
+                    ? t('common.loading')
+                    : editingEntryId
+                      ? t('inventory.updateStock')
+                      : t('inventory.saveStock')}
+                </button>
+              </div>
             </div>
 
             <div className="card space-y-2 flex-1 min-h-0">
@@ -262,17 +313,20 @@ export function InventoryPage() {
                 <p className="text-sm text-text-secondary py-4 text-center">{t('inventory.noRecords')}</p>
               ) : (
                 <>
-                  <div className="grid grid-cols-[minmax(0,1.1fr)_auto_minmax(0,0.9fr)_minmax(0,0.9fr)] gap-x-2 gap-y-0 px-1 text-[11px] font-medium text-text-secondary uppercase tracking-wide">
+                  <div className="grid grid-cols-[minmax(0,1.1fr)_auto_minmax(0,0.9fr)_minmax(0,0.9fr)_auto] gap-x-2 gap-y-0 px-1 text-[11px] font-medium text-text-secondary uppercase tracking-wide">
                     <span>{t('inventory.dateLabel')}</span>
                     <span>{t('feeding.feedCode')}</span>
                     <span className="text-right">{t('inventory.bagsLabel')}</span>
                     <span className="text-right">{t('inventory.totalKgLabel')}</span>
+                    <span className="sr-only">{t('common.edit')}</span>
                   </div>
                   <ul className="divide-y divide-border max-h-[50vh] overflow-y-auto">
                     {data.entries.map((entry) => (
                       <li
                         key={entry.id}
-                        className="grid grid-cols-[minmax(0,1.1fr)_auto_minmax(0,0.9fr)_minmax(0,0.9fr)] gap-x-2 gap-y-0 items-center py-2.5 px-1 min-w-0"
+                        className={`grid grid-cols-[minmax(0,1.1fr)_auto_minmax(0,0.9fr)_minmax(0,0.9fr)_auto] gap-x-2 gap-y-0 items-center py-2.5 px-1 min-w-0 ${
+                          editingEntryId === entry.id ? 'bg-primary/5 rounded-md' : ''
+                        }`}
                       >
                         <span className="text-sm font-medium text-text-primary truncate">
                           {formatShortDate(entry.transactionDate)}
@@ -286,6 +340,15 @@ export function InventoryPage() {
                         <span className="text-sm text-text-secondary tabular-nums text-right truncate">
                           {formatQty(entry.quantityKg)}
                         </span>
+                        <button
+                          type="button"
+                          onClick={() => startEdit(entry)}
+                          disabled={saving}
+                          className="btn-secondary btn-inline !text-xs !py-1 !px-2 !min-h-0 flex items-center gap-1 shrink-0"
+                          aria-label={t('inventory.editRecord')}
+                        >
+                          <Pencil size={13} />
+                        </button>
                       </li>
                     ))}
                   </ul>

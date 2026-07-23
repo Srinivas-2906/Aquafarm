@@ -155,34 +155,36 @@ export function FarmSelectPage() {
 
         {isLoading && <p className="text-center text-text-secondary py-6">{t('common.loading')}</p>}
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2">
           {farmOptions.map((farm) => {
             const isSelected = farm.id === selectedFarmId;
             return (
               <div
                 key={farm.id}
-                className={`card !p-2.5 text-left border transition-all ${
+                className={`card !p-3 text-left border transition-all ${
                   isSelected
                     ? 'border-primary bg-primary-light/40'
                     : 'border-primary/25 bg-primary-light/20 hover:border-primary/50'
                 }`}
               >
-                <div className="flex items-start gap-1.5">
+                <div className="flex items-start justify-between gap-2">
                   <button
                     type="button"
                     className="flex-1 min-w-0 text-left"
                     onClick={() => onSelectFarm(farm.id)}
                   >
-                    <div className="flex items-center gap-1 min-w-0">
-                      <p className="font-semibold text-sm text-primary leading-tight truncate">{farm.name}</p>
-                      {isSelected && (
-                        <span className="shrink-0 text-[9px] font-semibold uppercase text-primary">
-                          {t('farms.current')}
-                        </span>
-                      )}
-                    </div>
+                    <p className="font-semibold text-sm text-primary leading-snug break-words">
+                      {farm.name}
+                    </p>
+                    {isSelected && (
+                      <span className="inline-block mt-1 text-[10px] font-semibold uppercase tracking-wide text-primary">
+                        {t('farms.current')}
+                      </span>
+                    )}
                     {farm.location && (
-                      <p className="text-[11px] text-text-secondary mt-0.5 truncate">{farm.location}</p>
+                      <p className="text-xs text-text-secondary mt-1 leading-snug break-words">
+                        {farm.location}
+                      </p>
                     )}
                   </button>
 
